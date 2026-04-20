@@ -1,121 +1,75 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import heroImg from './assets/hero.png'
-import './App.css'
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
+import { Toaster } from 'sonner'
+import LandingPage from './LandingPage.jsx'
+import RequireManagerAuth from './gestionnaire/RequireManagerAuth'
+import ManagerLogin from './gestionnaire/ManagerLogin'
+import ManagerDashboard from './gestionnaire/ManagerDashboard'
+import ManagerResources from './gestionnaire/ManagerResources'
+import ManagerPlanningDragDrop from './gestionnaire/ManagerPlanningDragDrop'
+import ManagerPlanningYear from './gestionnaire/ManagerPlanningYear'
+import ManagerValidation from './gestionnaire/ManagerValidation'
+import ManagerPayments from './gestionnaire/ManagerPayments'
+import RequireTechnicianAuth from './technicien/RequireTechnicianAuth'
+import TechnicianLogin from './technicien/TechnicianLogin'
+import TechnicianDashboard from './technicien/TechnicianDashboard'
+import TechnicianDailyFormNew from './technicien/TechnicianDailyFormNew'
+import TechnicianExpenses from './technicien/TechnicianExpenses'
 
-function App() {
-  const [count, setCount] = useState(0)
-
+function LoginPlaceholder({ titre }) {
   return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.jsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
-
-      <div className="ticks"></div>
-
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
-
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
+    <div className="flex min-h-screen items-center justify-center bg-slate-50 p-4">
+      <p className="text-lg text-slate-700">{titre}</p>
+    </div>
   )
 }
 
-export default App
+export default function App() {
+  return (
+    <BrowserRouter>
+      <Toaster position="bottom-right" richColors closeButton />
+      <Routes>
+        <Route path="/" element={<LandingPage />} />
+        <Route path="/technicien/login" element={<TechnicianLogin />} />
+        <Route element={<RequireTechnicianAuth />}>
+          <Route
+            path="/technicien/dashboard"
+            element={<TechnicianDashboard />}
+          />
+          <Route
+            path="/technicien/saisie"
+            element={<TechnicianDailyFormNew />}
+          />
+          <Route path="/technicien/frais" element={<TechnicianExpenses />} />
+        </Route>
+        <Route path="/gestionnaire/login" element={<ManagerLogin />} />
+        <Route element={<RequireManagerAuth />}>
+          <Route
+            path="/gestionnaire/dashboard"
+            element={<ManagerDashboard />}
+          />
+          <Route
+            path="/gestionnaire/ressources"
+            element={<ManagerResources />}
+          />
+          <Route
+            path="/gestionnaire/planning"
+            element={<ManagerPlanningDragDrop />}
+          />
+          <Route
+            path="/gestionnaire/planning-annuel"
+            element={<ManagerPlanningYear />}
+          />
+          <Route
+            path="/gestionnaire/validation"
+            element={<ManagerValidation />}
+          />
+          <Route
+            path="/gestionnaire/paiements"
+            element={<ManagerPayments />}
+          />
+        </Route>
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </BrowserRouter>
+  )
+}
