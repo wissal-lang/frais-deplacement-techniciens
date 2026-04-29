@@ -6,7 +6,6 @@ import ManagerLogin from './gestionnaire/ManagerLogin'
 import ManagerDashboard from './gestionnaire/ManagerDashboard'
 import ManagerResources from './gestionnaire/ManagerResources'
 import ManagerPlanningDragDrop from './gestionnaire/ManagerPlanningDragDrop'
-import ManagerPlanningYear from './gestionnaire/ManagerPlanningYear'
 import ManagerValidation from './gestionnaire/ManagerValidation'
 import ManagerPayments from './gestionnaire/ManagerPayments'
 import RequireTechnicianAuth from './technicien/RequireTechnicianAuth'
@@ -54,10 +53,6 @@ export default function App() {
           <Route
             path="/gestionnaire/planning"
             element={<ManagerPlanningDragDrop />}
-          />
-          <Route
-            path="/gestionnaire/planning-annuel"
-            element={<ManagerPlanningYear />}
           />
           <Route
             path="/gestionnaire/validation"

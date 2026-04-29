@@ -1,6 +1,6 @@
 import { useNavigate, useLocation } from 'react-router-dom';
 import type { ReactNode } from 'react';
-import { LayoutDashboard, Users, Calendar, CheckSquare, LogOut, CalendarRange, CreditCard } from 'lucide-react';
+import { LayoutDashboard, Users, Calendar, CheckSquare, LogOut, CreditCard } from 'lucide-react';
 import { Button } from '../ui/button';
 import { clearManagerSession } from './managerSession';
 
@@ -16,7 +16,6 @@ export default function ManagerLayout({ children }: ManagerLayoutProps) {
     { name: 'Tableau de bord', path: '/gestionnaire/dashboard', icon: LayoutDashboard },
     { name: 'Ressources', path: '/gestionnaire/ressources', icon: Users },
     { name: 'Planning Hebdo', path: '/gestionnaire/planning', icon: Calendar },
-    { name: 'Planning Annuel', path: '/gestionnaire/planning-annuel', icon: CalendarRange },
     { name: 'Validation', path: '/gestionnaire/validation', icon: CheckSquare },
     { name: 'Paiements', path: '/gestionnaire/paiements', icon: CreditCard },
   ];
