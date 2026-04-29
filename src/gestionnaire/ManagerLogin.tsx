@@ -1,12 +1,11 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
-import { Navigate, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { Lock, Shield } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { toast } from 'sonner';
 import {
-  isManagerAuthenticated,
   setManagerSession,
 } from './managerSession';
 
@@ -14,19 +13,43 @@ export default function ManagerLogin() {
   const navigate = useNavigate();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  if (isManagerAuthenticated()) {
-    return <Navigate to="/gestionnaire/dashboard" replace />;
-  }
-
-  const handleLogin = (e: FormEvent) => {
+  const handleLogin = async (e: FormEvent) => {
     e.preventDefault();
-    if (email && password) {
+    if (!email || !password) {
+      toast.error('Veuillez remplir tous les champs');
+      return;
+    }
+
+    try {
+      setIsSubmitting(true);
+
+      const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:3000'}/login/gestionnaire`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          email,
+          mot_de_passe: password,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data?.message || data?.error || 'Email ou mot de passe invalide');
+      }
+
       setManagerSession();
       toast.success('Connexion réussie !');
       navigate('/gestionnaire/dashboard', { replace: true });
-    } else {
-      toast.error('Veuillez remplir tous les champs');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Erreur de connexion';
+      toast.error(message);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -75,10 +98,11 @@ export default function ManagerLogin() {
 
             <Button 
               type="submit" 
+              disabled={isSubmitting}
               className="w-full h-16 text-xl bg-green-600 hover:bg-green-700 mt-8"
             >
               <Lock className="w-6 h-6 mr-2" />
-              Se connecter
+              {isSubmitting ? 'Connexion...' : 'Se connecter'}
             </Button>
           </form>
         </div>

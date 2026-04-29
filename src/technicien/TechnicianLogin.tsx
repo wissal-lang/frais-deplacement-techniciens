@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import type { FormEvent } from 'react'
 import { Navigate, useNavigate } from 'react-router-dom'
 import { Lock, User } from 'lucide-react'
 import { Button } from '../ui/button'
@@ -13,19 +14,47 @@ export default function TechnicianLogin() {
   const navigate = useNavigate()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [isSubmitting, setIsSubmitting] = useState(false)
 
   if (isTechnicianAuthenticated()) {
     return <Navigate to="/technicien/dashboard" replace />
   }
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: FormEvent) => {
     e.preventDefault()
-    if (email && password) {
+    if (!email || !password) {
+      toast.error('Veuillez remplir tous les champs')
+      return
+    }
+
+    try {
+      setIsSubmitting(true)
+
+      const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:3000'}/login/technicien`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          email,
+          mot_de_passe: password,
+        }),
+      })
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        throw new Error(data?.message || data?.error || 'Email ou mot de passe invalide')
+      }
+
       setTechnicianSession()
       toast.success('Connexion réussie !')
       navigate('/technicien/dashboard', { replace: true })
-    } else {
-      toast.error('Veuillez remplir tous les champs')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Erreur de connexion'
+      toast.error(message)
+    } finally {
+      setIsSubmitting(false)
     }
   }
 
@@ -70,10 +99,11 @@ export default function TechnicianLogin() {
 
             <Button
               type="submit"
+              disabled={isSubmitting}
               className="mt-8 h-16 w-full bg-blue-600 text-xl hover:bg-blue-700"
             >
               <Lock className="mr-2 h-6 w-6" />
-              Se connecter
+              {isSubmitting ? 'Connexion...' : 'Se connecter'}
             </Button>
           </form>
         </div>
