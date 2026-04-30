@@ -5,6 +5,7 @@ import { Lock, User } from 'lucide-react'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import { toast } from 'sonner'
+import { apiFetch } from '../lib/api'
 import {
   isTechnicianAuthenticated,
   setTechnicianSession,
@@ -30,25 +31,16 @@ export default function TechnicianLogin() {
     try {
       setIsSubmitting(true)
 
-      const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:3000'}/login/technicien`, {
+      const data = await apiFetch<{ token: string }>('/login/technicien', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
+        body: {
           email,
           mot_de_passe: password,
-        }),
+        },
       })
 
-      const data = await response.json()
-
-      if (!response.ok) {
-        throw new Error(data?.message || data?.error || 'Email ou mot de passe invalide')
-      }
-
-      setTechnicianSession()
-      toast.success('Connexion réussie !')
+      setTechnicianSession(data.token)
+      toast.success('Connexion reussie !')
       navigate('/technicien/dashboard', { replace: true })
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Erreur de connexion'
@@ -92,7 +84,7 @@ export default function TechnicianLogin() {
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
+                placeholder="********"
                 className="h-14 text-lg"
               />
             </div>
@@ -113,7 +105,7 @@ export default function TechnicianLogin() {
           onClick={() => navigate('/')}
           className="mt-6 w-full text-center text-lg font-medium text-blue-700"
         >
-          ← Retour à l&apos;accueil
+          Retour a l'accueil
         </button>
       </div>
     </div>

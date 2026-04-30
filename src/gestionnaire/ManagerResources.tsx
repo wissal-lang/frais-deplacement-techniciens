@@ -1,103 +1,212 @@
-import { useState } from 'react';
-import ManagerLayout from './ManagerLayout';
-import { Card } from '../ui/card';
-import { Button } from '../ui/button';
-import { Input } from '../ui/input';
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '../ui/dialog';
-import { Label } from '../ui/label';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs';
-import { Plus, Pencil, Trash2, User, Briefcase } from 'lucide-react';
-import { toast } from 'sonner';
+import { useEffect, useState } from 'react'
+import ManagerLayout from './ManagerLayout'
+import { Card } from '../ui/card'
+import { Button } from '../ui/button'
+import { Input } from '../ui/input'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '../ui/dialog'
+import { Label } from '../ui/label'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs'
+import { Plus, Pencil, Trash2, User, Briefcase } from 'lucide-react'
+import { toast } from 'sonner'
+import { apiFetch } from '../lib/api'
+import { getManagerToken } from './managerSession'
 
-// Mock data
-const initialTechnicians = [
-  { id: 1, name: 'Jean Dupont', email: 'jean.dupont@entreprise.fr', phone: '06 12 34 56 78', status: 'Actif' },
-  { id: 2, name: 'Marie Martin', email: 'marie.martin@entreprise.fr', phone: '06 23 45 67 89', status: 'Actif' },
-  { id: 3, name: 'Pierre Durand', email: 'pierre.durand@entreprise.fr', phone: '06 34 56 78 90', status: 'Actif' },
-  { id: 4, name: 'Sophie Bernard', email: 'sophie.bernard@entreprise.fr', phone: '06 45 67 89 01', status: 'Actif' },
-];
+interface TechnicianRow {
+  id: number
+  nom: string
+  prenom: string | null
+  email: string
+  telephone: string | null
+  actif: boolean
+}
 
-const initialProjects = [
-  { id: 1, name: 'Installation Datacenter A', client: 'Entreprise Alpha', location: 'Paris 15ème', status: 'En cours' },
-  { id: 2, name: 'Maintenance Serveur B', client: 'Entreprise Beta', location: 'Issy-les-Moulineaux', status: 'En cours' },
-  { id: 3, name: 'Réparation urgente Système C', client: 'Entreprise Gamma', location: 'Boulogne-Billancourt', status: 'Urgent' },
-  { id: 4, name: 'Installation Réseau D', client: 'Entreprise Delta', location: 'Neuilly-sur-Seine', status: 'Planifié' },
-];
+interface ProjectRow {
+  id: number
+  nom: string
+  client: string
+  localisation: string
+  statut: string
+}
+
+function splitName(fullName: string) {
+  const parts = fullName.trim().split(/\s+/)
+  return {
+    nom: parts[0] || '',
+    prenom: parts.slice(1).join(' ') || null,
+  }
+}
+
+function projectStatusLabel(status: string) {
+  const normalized = status.toLowerCase()
+  if (normalized.includes('urgent')) return 'Urgent'
+  if (normalized.includes('term')) return 'Terminé'
+  if (normalized.includes('cours')) return 'En cours'
+  return 'Planifié'
+}
 
 export default function ManagerResources() {
-  const [technicians, setTechnicians] = useState(initialTechnicians);
-  const [projects, setProjects] = useState(initialProjects);
-  const [isAddTechnicianOpen, setIsAddTechnicianOpen] = useState(false);
-  const [isAddProjectOpen, setIsAddProjectOpen] = useState(false);
+  const [technicians, setTechnicians] = useState<TechnicianRow[]>([])
+  const [projects, setProjects] = useState<ProjectRow[]>([])
+  const [isAddTechnicianOpen, setIsAddTechnicianOpen] = useState(false)
+  const [isAddProjectOpen, setIsAddProjectOpen] = useState(false)
+  const [isLoading, setIsLoading] = useState(true)
 
   const [newTechnician, setNewTechnician] = useState({
     name: '',
     email: '',
     phone: '',
-  });
+    matricule: '',
+    password: 'password123',
+  })
 
   const [newProject, setNewProject] = useState({
     name: '',
     client: '',
     location: '',
-  });
+  })
 
-  const handleAddTechnician = () => {
+  const loadResources = async () => {
+    const token = getManagerToken()
+    if (!token) {
+      setIsLoading(false)
+      return
+    }
+
+    try {
+      const [technicianData, projectData] = await Promise.all([
+        apiFetch<{ users: TechnicianRow[] }>('/api/users?role=TECHNICIEN', { token }),
+        apiFetch<{ projets: ProjectRow[] }>('/api/projets', { token }),
+      ])
+      setTechnicians(technicianData.users)
+      setProjects(projectData.projets)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Impossible de charger les ressources'
+      toast.error(message)
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    loadResources()
+  }, [])
+
+  const handleAddTechnician = async () => {
     if (!newTechnician.name || !newTechnician.email || !newTechnician.phone) {
-      toast.error('Veuillez remplir tous les champs');
-      return;
+      toast.error('Veuillez remplir tous les champs')
+      return
     }
 
-    const technician = {
-      id: technicians.length + 1,
-      ...newTechnician,
-      status: 'Actif',
-    };
+    const token = getManagerToken()
+    if (!token) {
+      toast.error('Session expirée')
+      return
+    }
 
-    setTechnicians([...technicians, technician]);
-    setNewTechnician({ name: '', email: '', phone: '' });
-    setIsAddTechnicianOpen(false);
-    toast.success('Technicien ajouté avec succès');
-  };
+    const { nom, prenom } = splitName(newTechnician.name)
 
-  const handleAddProject = () => {
+    try {
+      await apiFetch('/api/users', {
+        method: 'POST',
+        token,
+        body: {
+          nom,
+          prenom,
+          email: newTechnician.email,
+          password: newTechnician.password,
+          telephone: newTechnician.phone,
+          matricule: newTechnician.matricule,
+          role: 'TECHNICIEN',
+          actif: true,
+        },
+      })
+
+      setNewTechnician({ name: '', email: '', phone: '', matricule: '', password: 'password123' })
+      setIsAddTechnicianOpen(false)
+      toast.success('Technicien ajouté avec succès')
+      await loadResources()
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Impossible de créer le technicien'
+      toast.error(message)
+    }
+  }
+
+  const handleAddProject = async () => {
     if (!newProject.name || !newProject.client || !newProject.location) {
-      toast.error('Veuillez remplir tous les champs');
-      return;
+      toast.error('Veuillez remplir tous les champs')
+      return
     }
 
-    const project = {
-      id: projects.length + 1,
-      ...newProject,
-      status: 'Planifié',
-    };
+    const token = getManagerToken()
+    if (!token) {
+      toast.error('Session expirée')
+      return
+    }
 
-    setProjects([...projects, project]);
-    setNewProject({ name: '', client: '', location: '' });
-    setIsAddProjectOpen(false);
-    toast.success('Projet ajouté avec succès');
-  };
+    try {
+      await apiFetch('/api/projets', {
+        method: 'POST',
+        token,
+        body: {
+          nom: newProject.name,
+          client: newProject.client,
+          localisation: newProject.location,
+          statut: 'planifie',
+        },
+      })
 
-  const handleDeleteTechnician = (id: number) => {
-    setTechnicians(technicians.filter(t => t.id !== id));
-    toast.success('Technicien supprimé');
-  };
+      setNewProject({ name: '', client: '', location: '' })
+      setIsAddProjectOpen(false)
+      toast.success('Projet ajouté avec succès')
+      await loadResources()
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Impossible de créer le projet'
+      toast.error(message)
+    }
+  }
 
-  const handleDeleteProject = (id: number) => {
-    setProjects(projects.filter(p => p.id !== id));
-    toast.success('Projet supprimé');
-  };
+  const handleDeleteTechnician = async (id: number) => {
+    const token = getManagerToken()
+    if (!token) {
+      toast.error('Session expirée')
+      return
+    }
+
+    try {
+      await apiFetch(`/api/users/${id}`, { method: 'DELETE', token })
+      toast.success('Technicien supprimé')
+      await loadResources()
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Impossible de supprimer le technicien'
+      toast.error(message)
+    }
+  }
+
+  const handleDeleteProject = async (id: number) => {
+    const token = getManagerToken()
+    if (!token) {
+      toast.error('Session expirée')
+      return
+    }
+
+    try {
+      await apiFetch(`/api/projets/${id}`, { method: 'DELETE', token })
+      toast.success('Projet supprimé')
+      await loadResources()
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Impossible de supprimer le projet'
+      toast.error(message)
+    }
+  }
 
   return (
     <ManagerLayout>
       <div className="p-8">
-        {/* Header */}
         <div className="mb-8">
           <h1 className="text-3xl font-bold text-gray-900 mb-2">Gestion des ressources</h1>
           <p className="text-gray-600">Gérez vos techniciens et projets</p>
         </div>
 
-        {/* Tabs */}
         <Tabs defaultValue="technicians" className="w-full">
           <TabsList className="mb-6">
             <TabsTrigger value="technicians" className="text-lg px-6 py-3">
@@ -110,7 +219,6 @@ export default function ManagerResources() {
             </TabsTrigger>
           </TabsList>
 
-          {/* Techniciens Tab */}
           <TabsContent value="technicians">
             <Card className="p-6">
               <div className="flex items-center justify-between mb-6">
@@ -127,9 +235,7 @@ export default function ManagerResources() {
                   <DialogContent>
                     <DialogHeader>
                       <DialogTitle>Nouveau technicien</DialogTitle>
-                      <DialogDescription>
-                        Ajoutez un nouveau technicien à l'équipe
-                      </DialogDescription>
+                      <DialogDescription>Ajoutez un nouveau technicien à l'équipe</DialogDescription>
                     </DialogHeader>
                     <div className="space-y-4 mt-4">
                       <div>
@@ -149,6 +255,25 @@ export default function ManagerResources() {
                           value={newTechnician.email}
                           onChange={(e) => setNewTechnician({ ...newTechnician, email: e.target.value })}
                           placeholder="jean.dupont@entreprise.fr"
+                        />
+                      </div>
+                      <div>
+                        <Label htmlFor="tech-password">Mot de passe</Label>
+                        <Input
+                          id="tech-password"
+                          type="password"
+                          value={newTechnician.password}
+                          onChange={(e) => setNewTechnician({ ...newTechnician, password: e.target.value })}
+                          placeholder="Mot de passe temporaire"
+                        />
+                      </div>
+                      <div>
+                        <Label htmlFor="tech-matricule">Matricule</Label>
+                        <Input
+                          id="tech-matricule"
+                          value={newTechnician.matricule}
+                          onChange={(e) => setNewTechnician({ ...newTechnician, matricule: e.target.value })}
+                          placeholder="Optionnel, ex: TECH-0001"
                         />
                       </div>
                       <div>
@@ -180,39 +305,46 @@ export default function ManagerResources() {
                     </tr>
                   </thead>
                   <tbody>
-                    {technicians.map((tech) => (
-                      <tr key={tech.id} className="border-b hover:bg-gray-50">
-                        <td className="py-3 px-4 font-medium">{tech.name}</td>
-                        <td className="py-3 px-4 text-gray-600">{tech.email}</td>
-                        <td className="py-3 px-4 text-gray-600">{tech.phone}</td>
-                        <td className="py-3 px-4">
-                          <span className="px-3 py-1 bg-green-100 text-green-700 rounded-full text-sm font-medium">
-                            {tech.status}
-                          </span>
-                        </td>
-                        <td className="py-3 px-4">
-                          <div className="flex items-center justify-end gap-2">
-                            <Button variant="ghost" size="sm">
-                              <Pencil className="w-4 h-4" />
-                            </Button>
-                            <Button 
-                              variant="ghost" 
-                              size="sm"
-                              onClick={() => handleDeleteTechnician(tech.id)}
-                            >
-                              <Trash2 className="w-4 h-4 text-red-600" />
-                            </Button>
-                          </div>
-                        </td>
+                    {isLoading ? (
+                      <tr>
+                        <td colSpan={5} className="py-6 text-center text-gray-500">Chargement...</td>
                       </tr>
-                    ))}
+                    ) : technicians.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="py-6 text-center text-gray-500">Aucun technicien trouvé</td>
+                      </tr>
+                    ) : (
+                      technicians.map((tech) => (
+                        <tr key={tech.id} className="border-b hover:bg-gray-50">
+                          <td className="py-3 px-4 font-medium">
+                            {[tech.nom, tech.prenom].filter(Boolean).join(' ')}
+                          </td>
+                          <td className="py-3 px-4 text-gray-600">{tech.email}</td>
+                          <td className="py-3 px-4 text-gray-600">{tech.telephone || '-'}</td>
+                          <td className="py-3 px-4">
+                            <span className={`px-3 py-1 rounded-full text-sm font-medium ${tech.actif ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-700'}`}>
+                              {tech.actif ? 'Actif' : 'Inactif'}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4">
+                            <div className="flex items-center justify-end gap-2">
+                              <Button variant="ghost" size="sm">
+                                <Pencil className="w-4 h-4" />
+                              </Button>
+                              <Button variant="ghost" size="sm" onClick={() => handleDeleteTechnician(tech.id)}>
+                                <Trash2 className="w-4 h-4 text-red-600" />
+                              </Button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))
+                    )}
                   </tbody>
                 </table>
               </div>
             </Card>
           </TabsContent>
 
-          {/* Projects Tab */}
           <TabsContent value="projects">
             <Card className="p-6">
               <div className="flex items-center justify-between mb-6">
@@ -281,36 +413,42 @@ export default function ManagerResources() {
                     </tr>
                   </thead>
                   <tbody>
-                    {projects.map((project) => (
-                      <tr key={project.id} className="border-b hover:bg-gray-50">
-                        <td className="py-3 px-4 font-medium">{project.name}</td>
-                        <td className="py-3 px-4 text-gray-600">{project.client}</td>
-                        <td className="py-3 px-4 text-gray-600">{project.location}</td>
-                        <td className="py-3 px-4">
-                          <span className={`px-3 py-1 rounded-full text-sm font-medium ${
-                            project.status === 'Urgent' ? 'bg-red-100 text-red-700' :
-                            project.status === 'En cours' ? 'bg-blue-100 text-blue-700' :
-                            'bg-gray-100 text-gray-700'
-                          }`}>
-                            {project.status}
-                          </span>
-                        </td>
-                        <td className="py-3 px-4">
-                          <div className="flex items-center justify-end gap-2">
-                            <Button variant="ghost" size="sm">
-                              <Pencil className="w-4 h-4" />
-                            </Button>
-                            <Button 
-                              variant="ghost" 
-                              size="sm"
-                              onClick={() => handleDeleteProject(project.id)}
-                            >
-                              <Trash2 className="w-4 h-4 text-red-600" />
-                            </Button>
-                          </div>
-                        </td>
+                    {isLoading ? (
+                      <tr>
+                        <td colSpan={5} className="py-6 text-center text-gray-500">Chargement...</td>
                       </tr>
-                    ))}
+                    ) : projects.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="py-6 text-center text-gray-500">Aucun projet trouvé</td>
+                      </tr>
+                    ) : (
+                      projects.map((project) => (
+                        <tr key={project.id} className="border-b hover:bg-gray-50">
+                          <td className="py-3 px-4 font-medium">{project.nom}</td>
+                          <td className="py-3 px-4 text-gray-600">{project.client}</td>
+                          <td className="py-3 px-4 text-gray-600">{project.localisation}</td>
+                          <td className="py-3 px-4">
+                            <span className={`px-3 py-1 rounded-full text-sm font-medium ${
+                              projectStatusLabel(project.statut) === 'Urgent' ? 'bg-red-100 text-red-700' :
+                              projectStatusLabel(project.statut) === 'En cours' ? 'bg-blue-100 text-blue-700' :
+                              'bg-gray-100 text-gray-700'
+                            }`}>
+                              {projectStatusLabel(project.statut)}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4">
+                            <div className="flex items-center justify-end gap-2">
+                              <Button variant="ghost" size="sm">
+                                <Pencil className="w-4 h-4" />
+                              </Button>
+                              <Button variant="ghost" size="sm" onClick={() => handleDeleteProject(project.id)}>
+                                <Trash2 className="w-4 h-4 text-red-600" />
+                              </Button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))
+                    )}
                   </tbody>
                 </table>
               </div>
@@ -319,5 +457,5 @@ export default function ManagerResources() {
         </Tabs>
       </div>
     </ManagerLayout>
-  );
+  )
 }

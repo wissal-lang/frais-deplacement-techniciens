@@ -1,13 +1,17 @@
-const TECHNICIAN_SESSION_KEY = 'technicianAuth'
+const TECHNICIAN_TOKEN_KEY = 'technicianToken'
 
-export function setTechnicianSession(): void {
-  sessionStorage.setItem(TECHNICIAN_SESSION_KEY, '1')
+export function setTechnicianSession(token: string): void {
+  sessionStorage.setItem(TECHNICIAN_TOKEN_KEY, token)
 }
 
 export function clearTechnicianSession(): void {
-  sessionStorage.removeItem(TECHNICIAN_SESSION_KEY)
+  sessionStorage.removeItem(TECHNICIAN_TOKEN_KEY)
+}
+
+export function getTechnicianToken(): string | null {
+  return sessionStorage.getItem(TECHNICIAN_TOKEN_KEY)
 }
 
 export function isTechnicianAuthenticated(): boolean {
-  return sessionStorage.getItem(TECHNICIAN_SESSION_KEY) === '1'
+  return Boolean(getTechnicianToken())
 }

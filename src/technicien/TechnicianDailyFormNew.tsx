@@ -1,20 +1,32 @@
-import { useState } from 'react';
-import { useNavigate } from 'react-router';
-import { ChevronLeft, CheckCircle, MapPin, Wrench, Clock } from 'lucide-react';
-import { Button } from '../ui/button';
-import { Card } from '../ui/card';
-import { Textarea } from '../ui/textarea';
-import { Checkbox } from '../ui/checkbox';
-import { toast } from 'sonner';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
+import { useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router'
+import { ChevronLeft, CheckCircle, MapPin, Wrench, Clock } from 'lucide-react'
+import { Button } from '../ui/button'
+import { Card } from '../ui/card'
+import { Textarea } from '../ui/textarea'
+import { Checkbox } from '../ui/checkbox'
+import { toast } from 'sonner'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
+import { apiFetch } from '../lib/api'
+import { getTechnicianToken } from './technicianSession'
 
-// Mock: Mission du jour
-const todayMission = {
-  project: 'Installation Datacenter A',
-  location: 'Paris 15ème',
-  time: '08:00',
-  client: 'Entreprise Alpha',
-};
+interface InterventionOption {
+  id: number
+  titre: string
+  lieuDepart: string
+  lieuArrivee: string
+  dateDepart: string | null
+}
+
+const todayMission: InterventionOption[] = [
+  {
+    id: 1,
+    titre: 'Installation site client',
+    lieuDepart: 'Rabat',
+    lieuArrivee: 'Casablanca',
+    dateDepart: new Date().toISOString(),
+  },
+]
 
 const materials = [
   'Serveurs Dell PowerEdge',
@@ -23,69 +35,165 @@ const materials = [
   'Onduleur APC',
   'Rack 42U',
   'Autre matériel',
-];
+]
 
 const timeOptions = [
-  '0h30', '1h00', '1h30', '2h00', '2h30', '3h00', 
-  '3h30', '4h00', '4h30', '5h00', '5h30', '6h00',
-  '6h30', '7h00', '7h30', '8h00'
-];
+  '0h30',
+  '1h00',
+  '1h30',
+  '2h00',
+  '2h30',
+  '3h00',
+  '3h30',
+  '4h00',
+  '4h30',
+  '5h00',
+  '5h30',
+  '6h00',
+  '6h30',
+  '7h00',
+  '7h30',
+  '8h00',
+]
+
+function formatMission(intervention?: InterventionOption) {
+  if (!intervention) {
+    return {
+      title: 'Aucune intervention',
+      location: '-',
+      time: '-',
+    }
+  }
+
+  return {
+    title: intervention.titre,
+    location: `${intervention.lieuDepart} → ${intervention.lieuArrivee}`,
+    time: intervention.dateDepart
+      ? new Date(intervention.dateDepart).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
+      : '-',
+  }
+}
 
 export default function TechnicianDailyFormNew() {
-  const navigate = useNavigate();
+  const navigate = useNavigate()
+  const [interventions, setInterventions] = useState<InterventionOption[]>(todayMission)
+  const [selectedInterventionId, setSelectedInterventionId] = useState('')
+  const [missionConfirmed, setMissionConfirmed] = useState(false)
+  const [gpsLocation, setGpsLocation] = useState('')
+  const [selectedMaterials, setSelectedMaterials] = useState<string[]>([])
+  const [installationComplete, setInstallationComplete] = useState(false)
+  const [clientPresent, setClientPresent] = useState(false)
+  const [testsPassed, setTestsPassed] = useState(false)
+  const [timeSpent, setTimeSpent] = useState('')
+  const [notes, setNotes] = useState('')
+  const [isSubmitting, setIsSubmitting] = useState(false)
 
-  const [missionConfirmed, setMissionConfirmed] = useState(false);
-  const [gpsLocation, setGpsLocation] = useState('');
-  const [selectedMaterials, setSelectedMaterials] = useState<string[]>([]);
-  const [installationComplete, setInstallationComplete] = useState(false);
-  const [clientPresent, setClientPresent] = useState(false);
-  const [testsPassed, setTestsPassed] = useState(false);
-  const [timeSpent, setTimeSpent] = useState('');
-  const [notes, setNotes] = useState('');
+  useEffect(() => {
+    const token = getTechnicianToken()
+    if (!token) return
 
-  // Simuler la géolocalisation
+    let cancelled = false
+
+    const load = async () => {
+      try {
+        const data = await apiFetch<InterventionOption[]>('/api/technicien/interventions', { token })
+        if (!cancelled) {
+          setInterventions(data.length ? data : todayMission)
+          if (data[0]) {
+            setSelectedInterventionId(String(data[0].id))
+          } else if (todayMission[0]) {
+            setSelectedInterventionId(String(todayMission[0].id))
+          }
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Impossible de charger les interventions'
+        toast.error(message)
+      }
+    }
+
+    load()
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const selectedMission = useMemo(
+    () => interventions.find((item) => String(item.id) === selectedInterventionId) || interventions[0],
+    [interventions, selectedInterventionId],
+  )
+
+  const missionView = formatMission(selectedMission)
+
   const handleConfirmPresence = () => {
-    setMissionConfirmed(true);
-    // Simulation GPS
+    setMissionConfirmed(true)
     setTimeout(() => {
-      setGpsLocation('Paris 15ème, Rue de Vaugirard');
-      toast.success('Position GPS acquise !');
-    }, 500);
-  };
+      setGpsLocation('Position GPS acquise')
+      toast.success('Position GPS acquise !')
+    }, 500)
+  }
 
   const handleMaterialToggle = (material: string) => {
-    setSelectedMaterials(prev =>
-      prev.includes(material)
-        ? prev.filter(m => m !== material)
-        : [...prev, material]
-    );
-  };
+    setSelectedMaterials((prev) =>
+      prev.includes(material) ? prev.filter((item) => item !== material) : [...prev, material],
+    )
+  }
 
-  const handleSubmit = () => {
-    if (!missionConfirmed || selectedMaterials.length === 0 || !timeSpent) {
-      toast.error('Veuillez compléter tous les champs obligatoires');
-      return;
+  const handleSubmit = async () => {
+    if (!missionConfirmed || selectedMaterials.length === 0 || !timeSpent || !selectedMission) {
+      toast.error('Veuillez compléter tous les champs obligatoires')
+      return
     }
-    
-    toast.success('✅ Journée validée avec succès !', {
-      description: 'Votre intervention a été enregistrée.',
-      duration: 3000,
-    });
-    
-    setTimeout(() => {
-      navigate('/technicien/dashboard');
-    }, 1500);
-  };
+
+    const token = getTechnicianToken()
+    if (!token) {
+      toast.error('Session expirée')
+      return
+    }
+
+    const [hours, minutes] = timeSpent.replace('h', ':').split(':')
+    const timeValue = `${hours.padStart(2, '0')}:${(minutes || '00').padStart(2, '0')}`
+
+    try {
+      setIsSubmitting(true)
+      await apiFetch('/api/rapports', {
+        method: 'POST',
+        token,
+        body: {
+          intervention: selectedMission.id,
+          date: new Date().toISOString(),
+          presenceConfirmee: missionConfirmed,
+          gpsAdresse: gpsLocation,
+          materielUtilise: selectedMaterials,
+          etapes: {
+            installationComplete,
+            clientPresent,
+            testsPassed,
+          },
+          tempsPasse: timeValue,
+          notes,
+        },
+      })
+
+      toast.success('Journée validée avec succès !', {
+        description: 'Votre intervention a été enregistrée.',
+        duration: 3000,
+      })
+
+      navigate('/technicien/dashboard')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Impossible d’enregistrer la saisie'
+      toast.error(message)
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-blue-100 pb-20">
-      {/* Header */}
       <div className="bg-blue-600 text-white p-6 shadow-lg sticky top-0 z-10">
         <div className="max-w-md mx-auto flex items-center justify-between">
-          <button 
-            onClick={() => navigate('/technicien/dashboard')}
-            className="p-2 hover:bg-blue-700 rounded-full"
-          >
+          <button onClick={() => navigate('/technicien/dashboard')} className="p-2 hover:bg-blue-700 rounded-full">
             <ChevronLeft className="w-7 h-7" />
           </button>
           <h1 className="text-2xl font-bold">Saisie Journalière</h1>
@@ -94,38 +202,50 @@ export default function TechnicianDailyFormNew() {
       </div>
 
       <div className="max-w-md mx-auto px-4 mt-6 space-y-4">
-        {/* Mission du jour */}
         <Card className="p-6 bg-gradient-to-r from-green-50 to-blue-50 border-2 border-green-300">
-          <div className="text-center mb-4">
-            <div className="w-16 h-16 bg-green-500 rounded-full flex items-center justify-center mx-auto mb-3">
-              <Wrench className="w-8 h-8 text-white" />
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-2">Intervention du jour</label>
+              <Select value={selectedInterventionId} onValueChange={setSelectedInterventionId}>
+                <SelectTrigger className="h-14 text-lg">
+                  <SelectValue placeholder="Sélectionnez une intervention" />
+                </SelectTrigger>
+                <SelectContent>
+                  {interventions.map((intervention) => (
+                    <SelectItem key={intervention.id} value={String(intervention.id)}>
+                      {intervention.titre}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
-            <h2 className="text-xl font-bold text-gray-900 mb-2">Mission du jour</h2>
-            <p className="text-2xl font-bold text-green-700 mb-2">{todayMission.project}</p>
-            <div className="text-sm text-gray-700 space-y-1">
-              <p>📍 {todayMission.location}</p>
-              <p>🕐 {todayMission.time}</p>
-              <p>👤 {todayMission.client}</p>
+
+            <div className="text-center mb-4">
+              <div className="w-16 h-16 bg-green-500 rounded-full flex items-center justify-center mx-auto mb-3">
+                <Wrench className="w-8 h-8 text-white" />
+              </div>
+              <h2 className="text-xl font-bold text-gray-900 mb-2">Mission du jour</h2>
+              <p className="text-2xl font-bold text-green-700 mb-2">{missionView.title}</p>
+              <div className="text-sm text-gray-700 space-y-1">
+                <p>📍 {missionView.location}</p>
+                <p>🕐 {missionView.time}</p>
+              </div>
             </div>
+
+            {!missionConfirmed ? (
+              <Button onClick={handleConfirmPresence} className="w-full h-16 text-xl bg-green-600 hover:bg-green-700">
+                <CheckCircle className="w-6 h-6 mr-2" />
+                Confirmer ma présence
+              </Button>
+            ) : (
+              <div className="bg-green-600 text-white p-4 rounded-lg text-center">
+                <CheckCircle className="w-8 h-8 mx-auto mb-2" />
+                <p className="font-bold">Présence confirmée ✓</p>
+              </div>
+            )}
           </div>
-          
-          {!missionConfirmed ? (
-            <Button 
-              onClick={handleConfirmPresence}
-              className="w-full h-16 text-xl bg-green-600 hover:bg-green-700"
-            >
-              <CheckCircle className="w-6 h-6 mr-2" />
-              Confirmer ma présence
-            </Button>
-          ) : (
-            <div className="bg-green-600 text-white p-4 rounded-lg text-center">
-              <CheckCircle className="w-8 h-8 mx-auto mb-2" />
-              <p className="font-bold">Présence confirmée ✓</p>
-            </div>
-          )}
         </Card>
 
-        {/* GPS Location */}
         {missionConfirmed && (
           <Card className="p-5 bg-blue-50 border-2 border-blue-300">
             <div className="flex items-center gap-4">
@@ -140,41 +260,65 @@ export default function TechnicianDailyFormNew() {
           </Card>
         )}
 
-        {/* Matériel utilisé */}
         {missionConfirmed && (
           <Card className="p-6">
             <h3 className="text-lg font-bold text-gray-900 mb-4">🔧 Matériel utilisé</h3>
             <p className="text-sm text-gray-600 mb-4">Sélectionnez un ou plusieurs matériels</p>
             <div className="space-y-3">
-              {materials.map((mat) => (
+              {materials.map((material) => (
                 <div
-                  key={mat}
+                  key={material}
                   className="flex items-center gap-4 p-4 bg-gray-50 rounded-lg hover:bg-blue-50 transition-colors cursor-pointer"
-                  onClick={() => handleMaterialToggle(mat)}
+                  onClick={() => handleMaterialToggle(material)}
                 >
                   <Checkbox
-                    id={`material-${mat}`}
-                    checked={selectedMaterials.includes(mat)}
-                    onCheckedChange={() => handleMaterialToggle(mat)}
+                    id={`material-${material}`}
+                    checked={selectedMaterials.includes(material)}
+                    onCheckedChange={() => handleMaterialToggle(material)}
                     className="w-6 h-6"
                   />
-                  <label htmlFor={`material-${mat}`} className="flex-1 cursor-pointer">
-                    <p className="text-lg font-semibold text-gray-900">{mat}</p>
+                  <label htmlFor={`material-${material}`} className="flex-1 cursor-pointer">
+                    <p className="text-lg font-semibold text-gray-900">{material}</p>
                   </label>
                 </div>
               ))}
             </div>
-            {selectedMaterials.length > 0 && (
-              <div className="mt-4 p-3 bg-blue-100 rounded-lg">
-                <p className="text-sm font-semibold text-blue-800">
-                  {selectedMaterials.length} matériel{selectedMaterials.length > 1 ? 's' : ''} sélectionné{selectedMaterials.length > 1 ? 's' : ''}
-                </p>
-              </div>
-            )}
           </Card>
         )}
 
-        {/* Checkboxes - Étapes */}
+        {missionConfirmed && selectedMaterials.length > 0 && (
+          <Card className="p-6">
+            <h3 className="text-lg font-bold text-gray-900 mb-4">
+              <Clock className="w-5 h-5 inline mr-2" />
+              Temps passé
+            </h3>
+            <Select value={timeSpent} onValueChange={setTimeSpent}>
+              <SelectTrigger className="h-14 text-lg">
+                <SelectValue placeholder="Sélectionner la durée..." />
+              </SelectTrigger>
+              <SelectContent>
+                {timeOptions.map((time) => (
+                  <SelectItem key={time} value={time}>
+                    {time}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Card>
+        )}
+
+        {missionConfirmed && selectedMaterials.length > 0 && (
+          <Card className="p-6">
+            <h3 className="text-sm font-medium text-gray-600 mb-3">Notes supplémentaires (Facultatif)</h3>
+            <Textarea
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="Informations complémentaires..."
+              className="min-h-24 text-base resize-none"
+            />
+          </Card>
+        )}
+
         {missionConfirmed && selectedMaterials.length > 0 && (
           <Card className="p-6">
             <h3 className="text-lg font-bold text-gray-900 mb-4">✓ Étapes de l'intervention</h3>
@@ -221,55 +365,19 @@ export default function TechnicianDailyFormNew() {
           </Card>
         )}
 
-        {/* Temps passé */}
         {missionConfirmed && selectedMaterials.length > 0 && (
-          <Card className="p-6">
-            <h3 className="text-lg font-bold text-gray-900 mb-4">
-              <Clock className="w-5 h-5 inline mr-2" />
-              Temps passé
-            </h3>
-            <Select value={timeSpent} onValueChange={setTimeSpent}>
-              <SelectTrigger className="h-14 text-lg">
-                <SelectValue placeholder="Sélectionner la durée..." />
-              </SelectTrigger>
-              <SelectContent>
-                {timeOptions.map((time) => (
-                  <SelectItem key={time} value={time} className="text-lg py-3">
-                    {time}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </Card>
-        )}
-
-        {/* Notes facultatives */}
-        {missionConfirmed && selectedMaterials.length > 0 && (
-          <Card className="p-6">
-            <h3 className="text-sm font-medium text-gray-600 mb-3">Notes supplémentaires (Facultatif)</h3>
-            <Textarea
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              placeholder="Informations complémentaires..."
-              className="min-h-24 text-base resize-none"
-            />
-          </Card>
-        )}
-
-        {/* Bouton de validation */}
-        {missionConfirmed && (
           <div className="sticky bottom-0 bg-gradient-to-t from-blue-100 to-transparent pt-6 pb-6">
             <Button
               onClick={handleSubmit}
-              disabled={selectedMaterials.length === 0 || !timeSpent}
+              disabled={isSubmitting || selectedMaterials.length === 0 || !timeSpent}
               className="w-full h-20 text-2xl bg-green-600 hover:bg-green-700 shadow-2xl disabled:opacity-50"
             >
               <CheckCircle className="w-8 h-8 mr-3" />
-              Valider ma journée
+              {isSubmitting ? 'Enregistrement...' : 'Valider ma journée'}
             </Button>
           </div>
         )}
       </div>
     </div>
-  );
+  )
 }
