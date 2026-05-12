@@ -1,125 +1,142 @@
-import { useNavigate } from 'react-router-dom';
-import { Calendar, Clock, MapPin, LogOut, Plus, Euro, FileText } from 'lucide-react';
-import { Button } from '../ui/button';
-import { Card } from '../ui/card';
-import { clearTechnicianSession } from './technicianSession';
+import { useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { Calendar, Clock, MapPin, LogOut, Plus, Euro, FileText } from 'lucide-react'
+import { Button } from '../ui/button'
+import { Card } from '../ui/card'
+import { clearTechnicianSession, getTechnicianToken } from './technicianSession'
+import { apiFetch } from '../lib/api'
 
-// Mock data pour le planning
-const planningData = [
-  {
-    id: 1,
-    day: 'Lundi 15 Mars',
-    date: '15/03',
-    interventions: [
-      { 
-        id: 1, 
-        time: '08:00', 
-        project: 'Installation Datacenter A', 
-        location: 'Paris 15ème',
-        type: 'installation'
-      },
-    ]
-  },
-  {
-    id: 2,
-    day: 'Mardi 16 Mars',
-    date: '16/03',
-    interventions: [
-      { 
-        id: 2, 
-        time: '09:00', 
-        project: 'Maintenance Serveur B', 
-        location: 'Issy-les-Moulineaux',
-        type: 'maintenance'
-      },
-    ]
-  },
-  {
-    id: 3,
-    day: 'Mercredi 17 Mars',
-    date: '17/03',
-    interventions: [
-      { 
-        id: 3, 
-        time: '08:30', 
-        project: 'Réparation urgente Système C', 
-        location: 'Boulogne-Billancourt',
-        type: 'urgent'
-      },
-    ]
-  },
-  {
-    id: 4,
-    day: 'Jeudi 18 Mars',
-    date: '18/03',
-    interventions: [
-      { 
-        id: 4, 
-        time: '10:00', 
-        project: 'Installation Réseau D', 
-        location: 'Neuilly-sur-Seine',
-        type: 'installation'
-      },
-    ]
-  },
-  {
-    id: 5,
-    day: 'Vendredi 19 Mars',
-    date: '19/03',
-    interventions: [
-      { 
-        id: 5, 
-        time: '09:00', 
-        project: 'Maintenance préventive E', 
-        location: 'La Défense',
-        type: 'maintenance'
-      },
-    ]
-  },
-];
+interface Intervention {
+  id: number
+  titre: string
+  lieuDepart: string | null
+  lieuArrivee: string | null
+  dateDepart: string | null
+  statut: string | null
+}
 
-const getTypeColor = (type: string) => {
-  switch (type) {
-    case 'urgent':
-      return 'bg-red-100 border-red-300 text-red-800';
-    case 'maintenance':
-      return 'bg-blue-100 border-blue-300 text-blue-800';
-    case 'installation':
-      return 'bg-green-100 border-green-300 text-green-800';
-    default:
-      return 'bg-gray-100 border-gray-300 text-gray-800';
-  }
-};
+interface DayGroup {
+  date: Date
+  label: string
+  interventions: Intervention[]
+}
 
-const getTypeBadge = (type: string) => {
-  switch (type) {
-    case 'urgent':
-      return 'Urgent';
-    case 'maintenance':
-      return 'Maintenance';
-    case 'installation':
-      return 'Installation';
-    default:
-      return type;
-  }
-};
+function getWeekDays(): Date[] {
+  const today = new Date()
+  const dow = today.getDay()
+  const monday = new Date(today)
+  monday.setDate(today.getDate() - (dow === 0 ? 6 : dow - 1))
+  monday.setHours(0, 0, 0, 0)
+  return Array.from({ length: 5 }, (_, i) => {
+    const d = new Date(monday)
+    d.setDate(monday.getDate() + i)
+    return d
+  })
+}
+
+function formatDayLabel(date: Date): string {
+  return date.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' })
+}
+
+function formatWeekRange(days: Date[]): string {
+  const first = days[0]
+  const last = days[days.length - 1]
+  const d1 = first.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long' })
+  const d2 = last.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' })
+  return `Semaine du ${d1} au ${d2}`
+}
+
+function extractTime(iso: string | null): string {
+  if (!iso) return '08:00'
+  const d = new Date(iso)
+  return d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
+}
+
+function interventionType(titre: string): 'urgent' | 'maintenance' | 'installation' {
+  const t = titre.toLowerCase()
+  if (t.includes('urgent') || t.includes('réparation') || t.includes('reparation')) return 'urgent'
+  if (t.includes('maintenance')) return 'maintenance'
+  return 'installation'
+}
+
+const TYPE_COLOR: Record<string, string> = {
+  urgent: 'bg-red-100 border-red-300 text-red-800',
+  maintenance: 'bg-blue-100 border-blue-300 text-blue-800',
+  installation: 'bg-green-100 border-green-300 text-green-800',
+}
+
+const TYPE_LABEL: Record<string, string> = {
+  urgent: 'Urgent',
+  maintenance: 'Maintenance',
+  installation: 'Installation',
+}
 
 export default function TechnicianDashboard() {
-  const navigate = useNavigate();
+  const navigate = useNavigate()
+  const [userName, setUserName] = useState('')
+  const [dayGroups, setDayGroups] = useState<DayGroup[]>([])
+  const [isLoading, setIsLoading] = useState(true)
+
+  const weekDays = useMemo(() => getWeekDays(), [])
+
+  useEffect(() => {
+    const token = getTechnicianToken()
+    if (!token) return
+
+    const load = async () => {
+      try {
+        const [meData, interventions] = await Promise.all([
+          apiFetch<{ user: { nom: string; prenom: string | null } }>('/api/technicien/me', { token }),
+          apiFetch<Intervention[]>('/api/technicien/interventions', { token }),
+        ])
+
+        const u = meData.user
+        setUserName([u.nom, u.prenom].filter(Boolean).join(' '))
+
+        const byDate = new Map<string, Intervention[]>()
+        for (const iv of interventions) {
+          if (!iv.dateDepart) continue
+          const key = new Date(iv.dateDepart).toISOString().slice(0, 10)
+          if (!byDate.has(key)) byDate.set(key, [])
+          byDate.get(key)!.push(iv)
+        }
+
+        setDayGroups(
+          weekDays.map((date) => ({
+            date,
+            label: formatDayLabel(date),
+            interventions: byDate.get(date.toISOString().slice(0, 10)) ?? [],
+          })),
+        )
+      } catch {
+        // keep empty state on error
+      } finally {
+        setIsLoading(false)
+      }
+    }
+
+    load()
+  }, [weekDays])
 
   const handleLogout = () => {
-    clearTechnicianSession();
-    navigate('/technicien/login', { replace: true });
-  };
+    clearTechnicianSession()
+    navigate('/technicien/login', { replace: true })
+  }
+
+  const activeDays = dayGroups.filter((d) => d.interventions.length > 0)
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-blue-100 pb-8">
-      {/* Header */}
       <div className="bg-blue-600 text-white p-6 shadow-lg">
         <div className="max-w-md mx-auto flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold">Mon Planning</h1>
-            <p className="text-blue-100 mt-1">Semaine du 15 au 19 Mars</p>
+            <p className="text-blue-100 mt-1">
+              {userName ? `Bonjour, ${userName}` : formatWeekRange(weekDays)}
+            </p>
+            {userName && (
+              <p className="text-blue-200 text-sm mt-0.5">{formatWeekRange(weekDays)}</p>
+            )}
           </div>
           <button
             type="button"
@@ -131,9 +148,7 @@ export default function TechnicianDashboard() {
         </div>
       </div>
 
-      {/* Content */}
       <div className="max-w-md mx-auto px-4 mt-6 space-y-4">
-        {/* Boutons d'action */}
         <div className="grid grid-cols-2 gap-3">
           <Button
             type="button"
@@ -165,47 +180,51 @@ export default function TechnicianDashboard() {
           </Button>
         </div>
 
-        {/* Liste du planning */}
-        {planningData.map((day) => (
-          <Card key={day.id} className="p-5 shadow-md">
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-3">
+        {isLoading ? (
+          <Card className="p-6 text-center text-gray-500">Chargement du planning...</Card>
+        ) : activeDays.length === 0 ? (
+          <Card className="p-6 text-center text-gray-500">
+            Aucune intervention prévue cette semaine.
+          </Card>
+        ) : (
+          activeDays.map((day) => (
+            <Card key={day.date.toISOString()} className="p-5 shadow-md">
+              <div className="flex items-center gap-3 mb-4">
                 <div className="w-14 h-14 bg-blue-100 rounded-full flex items-center justify-center">
                   <Calendar className="w-7 h-7 text-blue-600" />
                 </div>
-                <div>
-                  <h3 className="font-bold text-lg text-gray-900">{day.day}</h3>
-                </div>
+                <h3 className="font-bold text-lg text-gray-900 capitalize">{day.label}</h3>
               </div>
-            </div>
 
-            {/* Interventions du jour */}
-            <div className="space-y-3 mt-4">
-              {day.interventions.map((intervention) => (
-                <div 
-                  key={intervention.id}
-                  className={`p-4 rounded-xl border-2 ${getTypeColor(intervention.type)}`}
-                >
-                  <div className="flex items-start justify-between mb-3">
-                    <span className="font-bold text-xs uppercase px-3 py-1 bg-white rounded-full">
-                      {getTypeBadge(intervention.type)}
-                    </span>
-                    <div className="flex items-center gap-1 text-sm font-medium">
-                      <Clock className="w-4 h-4" />
-                      {intervention.time}
+              <div className="space-y-3">
+                {day.interventions.map((iv) => {
+                  const type = interventionType(iv.titre)
+                  return (
+                    <div key={iv.id} className={`p-4 rounded-xl border-2 ${TYPE_COLOR[type]}`}>
+                      <div className="flex items-start justify-between mb-3">
+                        <span className="font-bold text-xs uppercase px-3 py-1 bg-white rounded-full">
+                          {TYPE_LABEL[type]}
+                        </span>
+                        <div className="flex items-center gap-1 text-sm font-medium">
+                          <Clock className="w-4 h-4" />
+                          {extractTime(iv.dateDepart)}
+                        </div>
+                      </div>
+                      <h4 className="font-bold text-base mb-2">{iv.titre}</h4>
+                      {(iv.lieuArrivee || iv.lieuDepart) && (
+                        <div className="flex items-center gap-2 text-sm">
+                          <MapPin className="w-4 h-4" />
+                          <span>{iv.lieuArrivee || iv.lieuDepart}</span>
+                        </div>
+                      )}
                     </div>
-                  </div>
-                  <h4 className="font-bold text-base mb-2">{intervention.project}</h4>
-                  <div className="flex items-center gap-2 text-sm">
-                    <MapPin className="w-4 h-4" />
-                    <span>{intervention.location}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </Card>
-        ))}
+                  )
+                })}
+              </div>
+            </Card>
+          ))
+        )}
       </div>
     </div>
-  );
+  )
 }
