@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ChevronLeft, Upload, Send, FileText } from 'lucide-react'
+import { ChevronLeft, Send, FileText } from 'lucide-react'
 import { Card } from '../ui/card'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
@@ -53,7 +53,6 @@ export default function TechnicianExpenseRequest() {
   const [amount, setAmount] = useState('')
   const [date, setDate] = useState('')
   const [description, setDescription] = useState('')
-  const [fileName, setFileName] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [requests, setRequests] = useState<ApiExpense[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -74,12 +73,6 @@ export default function TechnicianExpenseRequest() {
   useEffect(() => {
     loadRequests()
   }, [])
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files?.[0]) {
-      setFileName(e.target.files[0].name)
-    }
-  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -117,7 +110,6 @@ export default function TechnicianExpenseRequest() {
       setAmount('')
       setDate('')
       setDescription('')
-      setFileName('')
       await loadRequests()
     } catch (err) {
       const message =
@@ -201,28 +193,6 @@ export default function TechnicianExpenseRequest() {
                 onChange={(e) => setDescription(e.target.value)}
                 className="min-h-24 text-lg resize-none"
               />
-            </div>
-
-            <div>
-              <Label className="text-base font-bold mb-2 block">Justificatif</Label>
-              <div className="relative">
-                <input
-                  type="file"
-                  accept="image/*,.pdf"
-                  onChange={handleFileChange}
-                  className="hidden"
-                  id="file-upload"
-                />
-                <label
-                  htmlFor="file-upload"
-                  className="flex items-center justify-center gap-3 h-14 px-4 border-2 border-dashed border-purple-300 rounded-lg cursor-pointer hover:bg-purple-50 transition-colors"
-                >
-                  <Upload className="w-6 h-6 text-purple-600" />
-                  <span className="text-base font-medium text-purple-700">
-                    {fileName || 'Ajouter une photo ou PDF'}
-                  </span>
-                </label>
-              </div>
             </div>
 
             <Button

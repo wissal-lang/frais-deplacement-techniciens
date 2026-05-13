@@ -12,6 +12,10 @@ const { Pool } = pg
 const app = express()
 app.use(express.json())
 app.use(cors())
+app.use((req, _res, next) => {
+  if (req.body == null) req.body = {}
+  next()
+})
 
 const pool = new Pool({
   user: process.env.DB_USER || 'postgres',
@@ -99,11 +103,15 @@ function formatInterventionRow(row) {
 }
 
 function formatPlanningInterventionRow(row) {
+  // Use users.id (technicien_user_id) when available so the planning board
+  // can match against the technician list (which also uses users.id).
+  const userId = row.technicien_user_id || row.technicien_id
   return {
     ...formatInterventionRow(row),
+    technicienId: userId,
     technicien: row.technicien_nom
       ? {
-          id: row.technicien_id,
+          id: userId,
           nom: row.technicien_nom,
           prenom: row.technicien_prenom || null,
           email: row.technicien_email || null,
@@ -1389,7 +1397,8 @@ app.get('/api/interventions', requireRole(ROLE_GESTIONNAIRE), async (req, res) =
         return res.status(400).json({ error: 'technicien invalide' })
       }
       params.push(technicienId)
-      filters.push(`i.technicien_id = $${params.length}`)
+      // Accept both techniciens.id and users.id (t.user_id is available via the JOIN below)
+      filters.push(`(i.technicien_id = $${params.length} OR t.user_id = $${params.length})`)
     }
 
     const statut = typeof req.query.statut === 'string' ? req.query.statut.trim() : ''
@@ -1438,6 +1447,7 @@ app.get('/api/interventions', requireRole(ROLE_GESTIONNAIRE), async (req, res) =
       `
         SELECT
           i.*,
+          u.id AS technicien_user_id,
           u.nom AS technicien_nom,
           u.prenom AS technicien_prenom,
           u.email AS technicien_email
@@ -1471,6 +1481,7 @@ app.get('/api/interventions/:id', requireRole(ROLE_GESTIONNAIRE), async (req, re
       `
         SELECT
           i.*,
+          u.id AS technicien_user_id,
           u.nom AS technicien_nom,
           u.prenom AS technicien_prenom,
           u.email AS technicien_email
@@ -1495,6 +1506,7 @@ app.get('/api/interventions/:id', requireRole(ROLE_GESTIONNAIRE), async (req, re
 
 app.post('/api/interventions', requireRole(ROLE_GESTIONNAIRE), async (req, res) => {
   try {
+    console.log('[POST /api/interventions] body reçu:', JSON.stringify(req.body))
     const technicienId = parseInteger(req.body.technicien_id ?? req.body.technicien)
     const titre = typeof req.body.titre === 'string' ? req.body.titre.trim() : ''
     const description = typeof req.body.description === 'string' ? req.body.description.trim() : null
@@ -1503,20 +1515,57 @@ app.post('/api/interventions', requireRole(ROLE_GESTIONNAIRE), async (req, res) 
     const dateDepartInput = req.body.date_depart ?? req.body.dateDepart
     const statut = typeof req.body.statut === 'string' ? req.body.statut.trim() : 'PLANIFIEE'
 
+    console.log('[POST /api/interventions] technicienId parsé:', technicienId)
+
     if (!technicienId || !titre || !lieuDepart || !lieuArrivee || !dateDepartInput) {
       return res.status(400).json({
         error: 'technicien_id, titre, lieu_depart, lieu_arrivee et date_depart sont obligatoires',
       })
     }
 
+    // Résolution robuste : on cherche d'abord dans techniciens (par t.id ou t.user_id),
+    // puis si rien, on vérifie si c'est un utilisateur TECHNICIEN valide et on crée
+    // automatiquement la ligne techniciens manquante (auto-réparation).
+    let resolvedTechnicianId = null
     const technicianCheck = await pool.query(
-      'SELECT t.id FROM techniciens t WHERE t.id = $1 LIMIT 1',
+      `SELECT t.id, t.user_id FROM techniciens t WHERE t.id = $1 OR t.user_id = $1 LIMIT 1`,
       [technicienId],
     )
 
-    if (!technicianCheck.rows[0]) {
-      return res.status(404).json({ error: 'Technicien introuvable' })
+    console.log('[POST /api/interventions] technicianCheck rows:', technicianCheck.rows)
+
+    if (technicianCheck.rows[0]) {
+      resolvedTechnicianId = technicianCheck.rows[0].id
+    } else {
+      // Pas de ligne techniciens → vérifier si l'utilisateur existe et a le rôle TECHNICIEN
+      const userCheck = await pool.query(
+        `SELECT id, role, actif FROM users WHERE id = $1 LIMIT 1`,
+        [technicienId],
+      )
+      console.log('[POST /api/interventions] userCheck rows:', userCheck.rows)
+      if (!userCheck.rows[0]) {
+        return res.status(404).json({ error: `Technicien introuvable : aucun utilisateur avec id=${technicienId}` })
+      }
+      const u = userCheck.rows[0]
+      const normalizedRole = String(u.role).toUpperCase().trim()
+      if (normalizedRole !== ROLE_TECHNICIEN) {
+        return res.status(400).json({ error: `Utilisateur id=${u.id} a le rôle "${u.role}", pas TECHNICIEN` })
+      }
+      if (u.actif === false) {
+        return res.status(400).json({ error: `Le technicien id=${u.id} est inactif` })
+      }
+      // Auto-création de la ligne techniciens manquante
+      const autoMatricule = `TECH-${String(u.id).padStart(4, '0')}`
+      console.log(`[POST /api/interventions] Auto-création techniciens pour user_id=${u.id}, matricule=${autoMatricule}`)
+      const inserted = await pool.query(
+        `INSERT INTO techniciens (matricule, user_id) VALUES ($1, $2) RETURNING id`,
+        [autoMatricule, u.id],
+      )
+      resolvedTechnicianId = inserted.rows[0].id
+      console.log(`[POST /api/interventions] Ligne techniciens créée: id=${resolvedTechnicianId}`)
     }
+
+    console.log('[POST /api/interventions] resolvedTechnicianId final:', resolvedTechnicianId)
 
     const dateDepart = new Date(dateDepartInput)
     if (Number.isNaN(dateDepart.getTime())) {
@@ -1537,13 +1586,14 @@ app.post('/api/interventions', requireRole(ROLE_GESTIONNAIRE), async (req, res) 
         VALUES ($1, $2, $3, $4, $5, $6, $7)
         RETURNING id
       `,
-      [technicienId, titre, description, lieuDepart, lieuArrivee, dateDepart.toISOString(), statut],
+      [resolvedTechnicianId, titre, description, lieuDepart, lieuArrivee, dateDepart.toISOString(), statut],
     )
 
     const created = await pool.query(
       `
         SELECT
           i.*,
+          u.id AS technicien_user_id,
           u.nom AS technicien_nom,
           u.prenom AS technicien_prenom,
           u.email AS technicien_email
@@ -1593,10 +1643,37 @@ app.put('/api/interventions/:id', requireRole(ROLE_GESTIONNAIRE), async (req, re
       dateDepart = parsed.toISOString()
     }
 
+    let resolvedUpdateTechnicianId = technicienId
     if (technicienId) {
-      const technicianCheck = await pool.query('SELECT id FROM techniciens WHERE id = $1 LIMIT 1', [technicienId])
-      if (!technicianCheck.rows[0]) {
-        return res.status(404).json({ error: 'Technicien introuvable' })
+      const technicianCheck = await pool.query(
+        `SELECT t.id FROM techniciens t WHERE t.id = $1 OR t.user_id = $1 LIMIT 1`,
+        [technicienId],
+      )
+      if (technicianCheck.rows[0]) {
+        resolvedUpdateTechnicianId = technicianCheck.rows[0].id
+      } else {
+        // Auto-réparation : si l'utilisateur existe et est un technicien actif,
+        // on lui crée une ligne techniciens manquante.
+        const userCheck = await pool.query(
+          `SELECT id, role, actif FROM users WHERE id = $1 LIMIT 1`,
+          [technicienId],
+        )
+        if (!userCheck.rows[0]) {
+          return res.status(404).json({ error: 'Technicien introuvable (utilisateur inexistant)' })
+        }
+        const u = userCheck.rows[0]
+        if (String(u.role).toUpperCase() !== ROLE_TECHNICIEN) {
+          return res.status(400).json({ error: `Cet utilisateur n'est pas un technicien (rôle: ${u.role})` })
+        }
+        if (!u.actif) {
+          return res.status(400).json({ error: 'Ce technicien est inactif' })
+        }
+        const autoMatricule = `TECH-${String(u.id).padStart(4, '0')}`
+        const inserted = await pool.query(
+          `INSERT INTO techniciens (matricule, user_id) VALUES ($1, $2) RETURNING id`,
+          [autoMatricule, u.id],
+        )
+        resolvedUpdateTechnicianId = inserted.rows[0].id
       }
     }
 
@@ -1614,13 +1691,14 @@ app.put('/api/interventions/:id', requireRole(ROLE_GESTIONNAIRE), async (req, re
         WHERE id = $8
         RETURNING id
       `,
-      [technicienId, titre, description, lieuDepart, lieuArrivee, dateDepart, statut, interventionId],
+      [resolvedUpdateTechnicianId, titre, description, lieuDepart, lieuArrivee, dateDepart, statut, interventionId],
     )
 
     const updated = await pool.query(
       `
         SELECT
           i.*,
+          u.id AS technicien_user_id,
           u.nom AS technicien_nom,
           u.prenom AS technicien_prenom,
           u.email AS technicien_email
@@ -2085,6 +2163,8 @@ app.post('/api/technicien/frais', requireRole(ROLE_TECHNICIEN), async (req, res)
       })
     }
 
+    const normalizedTypeFrais = String(type_frais).toUpperCase()
+
     let interventionId = parseInteger(providedInterventionId)
     if (!interventionId) {
       const fallback = await pool.query(
@@ -2134,7 +2214,7 @@ app.post('/api/technicien/frais', requireRole(ROLE_TECHNICIEN), async (req, res)
       `,
       [
         interventionId,
-        type_frais,
+        normalizedTypeFrais,
         montant,
         devise,
         date_frais,
@@ -2171,7 +2251,7 @@ app.get('/api/manager/dashboard', requireRole(ROLE_GESTIONNAIRE), async (req, re
       recentInterventions,
       recentExpenses,
     ] = await Promise.all([
-      pool.query('SELECT COUNT(*)::int AS count FROM techniciens'),
+      pool.query(`SELECT COUNT(*)::int AS count FROM techniciens t JOIN users u ON u.id = t.user_id WHERE u.actif = true`),
       pool.query('SELECT COUNT(*)::int AS count FROM interventions'),
       pool.query('SELECT COUNT(*)::int AS count FROM frais_deplacement'),
       pool.query(
@@ -2272,6 +2352,42 @@ app.get('/api/manager/expenses', requireRole(ROLE_GESTIONNAIRE), async (req, res
     )
 
     return res.json(result.rows.map(formatExpenseRow))
+  } catch (error) {
+    return res.status(500).json({ error: error.message })
+  }
+})
+
+app.patch('/api/manager/expenses/:id/validate', requireRole(ROLE_GESTIONNAIRE), async (req, res) => {
+  try {
+    const expenseId = parseInteger(req.params.id)
+    if (!expenseId) {
+      return res.status(400).json({ error: 'Identifiant invalide' })
+    }
+
+    const manager = await getManagerOrFail(req.auth.user.id)
+    const commentaire = typeof req.body.commentaire === 'string' ? req.body.commentaire.trim() || null : null
+
+    const updatedId = await runTransaction(async (client) => {
+      const result = await client.query(
+        `UPDATE frais_deplacement SET statut_validation = $1 WHERE id = $2 AND statut_validation = $3 RETURNING id`,
+        [EXPENSE_STATUS_VALIDATED, expenseId, EXPENSE_STATUS_PENDING],
+      )
+
+      if (!result.rows[0]) return null
+
+      await client.query(
+        `INSERT INTO validations (frais_id, gestionnaire_id, decision, commentaire) VALUES ($1, $2, $3, $4)`,
+        [expenseId, manager.manager_id, EXPENSE_STATUS_VALIDATED, commentaire],
+      )
+
+      return result.rows[0].id
+    })
+
+    if (!updatedId) {
+      return res.status(404).json({ error: 'Frais introuvable ou déjà traité' })
+    }
+
+    return res.json({ success: true, message: 'Frais validé' })
   } catch (error) {
     return res.status(500).json({ error: error.message })
   }

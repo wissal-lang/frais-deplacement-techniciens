@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router'
-import { ChevronLeft, CheckCircle, MapPin, Wrench, Clock } from 'lucide-react'
+import { ChevronLeft, CheckCircle, Wrench, Clock } from 'lucide-react'
 import { Button } from '../ui/button'
 import { Card } from '../ui/card'
 import { Textarea } from '../ui/textarea'
@@ -79,7 +79,6 @@ export default function TechnicianDailyFormNew() {
   const [interventions, setInterventions] = useState<InterventionOption[]>(todayMission)
   const [selectedInterventionId, setSelectedInterventionId] = useState('')
   const [missionConfirmed, setMissionConfirmed] = useState(false)
-  const [gpsLocation, setGpsLocation] = useState('')
   const [selectedMaterials, setSelectedMaterials] = useState<string[]>([])
   const [installationComplete, setInstallationComplete] = useState(false)
   const [clientPresent, setClientPresent] = useState(false)
@@ -127,10 +126,7 @@ export default function TechnicianDailyFormNew() {
 
   const handleConfirmPresence = () => {
     setMissionConfirmed(true)
-    setTimeout(() => {
-      setGpsLocation('Position GPS acquise')
-      toast.success('Position GPS acquise !')
-    }, 500)
+    toast.success('Présence confirmée !')
   }
 
   const handleMaterialToggle = (material: string) => {
@@ -163,7 +159,6 @@ export default function TechnicianDailyFormNew() {
           intervention: selectedMission.id,
           date: new Date().toISOString(),
           presenceConfirmee: missionConfirmed,
-          gpsAdresse: gpsLocation,
           materielUtilise: selectedMaterials,
           etapes: {
             installationComplete,
@@ -245,20 +240,6 @@ export default function TechnicianDailyFormNew() {
             )}
           </div>
         </Card>
-
-        {missionConfirmed && (
-          <Card className="p-5 bg-blue-50 border-2 border-blue-300">
-            <div className="flex items-center gap-4">
-              <div className="w-14 h-14 bg-blue-500 rounded-full flex items-center justify-center flex-shrink-0">
-                <MapPin className="w-7 h-7 text-white" />
-              </div>
-              <div className="flex-1">
-                <p className="text-sm font-semibold text-gray-700 mb-1">Position GPS acquise</p>
-                <p className="text-lg font-bold text-blue-700">{gpsLocation}</p>
-              </div>
-            </div>
-          </Card>
-        )}
 
         {missionConfirmed && (
           <Card className="p-6">
