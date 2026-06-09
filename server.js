@@ -4,18 +4,71 @@ import bcrypt from 'bcrypt'
 import jwt from 'jsonwebtoken'
 import cors from 'cors'
 import dotenv from 'dotenv'
+import fs from 'fs'
+import path from 'path'
+import crypto from 'crypto'
+import { fileURLToPath } from 'url'
 
 dotenv.config()
 
 const { Pool } = pg
 
+// Dossier où sont stockés les fichiers téléversés (justificatifs de frais).
+// On le crée au démarrage s'il n'existe pas.
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const UPLOADS_DIR = path.join(__dirname, 'uploads')
+const JUSTIFICATIFS_DIR = path.join(UPLOADS_DIR, 'justificatifs')
+fs.mkdirSync(JUSTIFICATIFS_DIR, { recursive: true })
+
 const app = express()
-app.use(express.json())
+// On augmente la limite : les justificatifs (images/PDF) sont envoyés en
+// base64 dans le corps JSON, ce qui gonfle la taille (~+33%).
+app.use(express.json({ limit: '15mb' }))
 app.use(cors())
+// Les fichiers téléversés sont servis en statique sous /uploads/...
+app.use('/uploads', express.static(UPLOADS_DIR))
 app.use((req, _res, next) => {
   if (req.body == null) req.body = {}
   next()
 })
+
+// Types de justificatifs autorisés + extension de fichier correspondante.
+const JUSTIFICATIF_MIME_EXT = {
+  'image/jpeg': '.jpg',
+  'image/png': '.png',
+  'image/webp': '.webp',
+  'image/gif': '.gif',
+  'application/pdf': '.pdf',
+}
+
+// Enregistre un fichier reçu sous forme de data URL base64
+// (ex: "data:image/png;base64,iVBORw0K...") dans /uploads/justificatifs.
+// Retourne le chemin public à stocker en base (ex: /uploads/justificatifs/xxx.png).
+function saveBase64Justificatif(dataUrl) {
+  if (typeof dataUrl !== 'string') return null
+  const match = /^data:([^;]+);base64,(.+)$/s.exec(dataUrl.trim())
+  if (!match) {
+    throw new Error('Justificatif invalide (format attendu : data URL base64)')
+  }
+  const mime = match[1]
+  const extension = JUSTIFICATIF_MIME_EXT[mime]
+  if (!extension) {
+    throw new Error('Type de justificatif non autorisé (images ou PDF uniquement)')
+  }
+  const buffer = Buffer.from(match[2], 'base64')
+  // Garde-fou taille : 5 Mo max après décodage.
+  if (buffer.length > 5 * 1024 * 1024) {
+    throw new Error('Justificatif trop volumineux (5 Mo maximum)')
+  }
+  const fileName = `${Date.now()}-${crypto.randomBytes(6).toString('hex')}${extension}`
+  fs.writeFileSync(path.join(JUSTIFICATIFS_DIR, fileName), buffer)
+  return `/uploads/justificatifs/${fileName}`
+}
+
+// Génère un mot de passe temporaire lisible (utilisé lors d'une réinitialisation).
+function generateTemporaryPassword() {
+  return `Temp-${crypto.randomBytes(4).toString('hex')}`
+}
 
 const pool = new Pool({
   user: process.env.DB_USER || 'postgres',
@@ -80,9 +133,27 @@ function formatExpenseRow(row) {
     mission: row.mission || row.titre || '',
     technicien: row.technicien || '',
     technicianId: row.technicien_id,
+    justificatifUrl: row.justificatif_url || null,
+    justificatifNom: row.justificatif_nom || null,
     createdAt: formatDate(row.created_at),
     decision: row.decision || null,
     validatedAt: formatDate(row.date_decision),
+  }
+}
+
+function formatMaterialRow(row) {
+  return {
+    id: row.id,
+    reference: row.reference || null,
+    nom: row.nom,
+    description: row.description || '',
+    categorie: row.categorie || null,
+    quantiteStock: row.quantite_stock !== null && row.quantite_stock !== undefined ? Number(row.quantite_stock) : 0,
+    unite: row.unite || 'unité',
+    prixUnitaire: row.prix_unitaire !== null && row.prix_unitaire !== undefined ? Number(row.prix_unitaire) : null,
+    actif: row.actif === true,
+    createdAt: formatDate(row.created_at),
+    updatedAt: formatDate(row.updated_at),
   }
 }
 
@@ -96,6 +167,10 @@ function formatInterventionRow(row) {
     lieuArrivee: row.lieu_arrivee,
     dateDepart: formatDate(row.date_depart),
     dateRetour: formatDate(row.date_retour),
+    // Alias "début / fin" : représentent le même chose que dateDepart / dateRetour
+    // mais collent au vocabulaire "intervention sur plusieurs jours".
+    dateDebut: formatDate(row.date_depart),
+    dateFin: formatDate(row.date_retour),
     distanceKm: row.distance_km !== null && row.distance_km !== undefined ? Number(row.distance_km) : null,
     statut: row.statut || null,
     createdAt: formatDate(row.created_at),
@@ -779,6 +854,15 @@ app.put('/api/users/:id', requireRole(ROLE_GESTIONNAIRE), async (req, res) => {
     const actif = req.body.actif === undefined ? Boolean(existingUser.actif) : Boolean(req.body.actif)
     const password = typeof req.body.password === 'string' ? req.body.password : typeof req.body.mot_de_passe === 'string' ? req.body.mot_de_passe : ''
 
+    // RÈGLE MÉTIER : le gestionnaire n'a PAS le droit de changer le mot de passe
+    // d'un technicien. Il peut seulement déclencher une réinitialisation via
+    // POST /api/users/:id/reset-password. On bloque donc toute tentative ici.
+    if (password && normalizeRole(existingUser.role) === ROLE_TECHNICIEN) {
+      return res.status(403).json({
+        error: "Le gestionnaire ne peut pas changer le mot de passe d'un technicien. Utilisez la réinitialisation.",
+      })
+    }
+
     const duplicateEmail = await pool.query('SELECT id FROM users WHERE email = $1 AND id <> $2 LIMIT 1', [email, userId])
     if (duplicateEmail.rows.length) {
       return res.status(409).json({ error: 'Cet email existe déjà' })
@@ -839,6 +923,37 @@ app.delete('/api/users/:id', requireRole(ROLE_GESTIONNAIRE), async (req, res) =>
     }
 
     return res.json({ success: true, message: 'Utilisateur désactivé' })
+  } catch (error) {
+    return res.status(500).json({ error: error.message })
+  }
+})
+
+// RÉINITIALISATION du mot de passe par le gestionnaire.
+// Le gestionnaire ne CHOISIT pas le mot de passe : on en génère un temporaire,
+// on le stocke (haché) et on le renvoie UNE SEULE FOIS pour qu'il le transmette
+// au technicien, qui pourra ensuite le changer lui-même.
+app.post('/api/users/:id/reset-password', requireRole(ROLE_GESTIONNAIRE), async (req, res) => {
+  try {
+    const userId = parseInteger(req.params.id)
+    if (!userId) {
+      return res.status(400).json({ error: 'Identifiant invalide' })
+    }
+
+    const existingUser = await fetchUserById(userId)
+    if (!existingUser) {
+      return res.status(404).json({ error: 'Utilisateur introuvable' })
+    }
+
+    const temporaryPassword = generateTemporaryPassword()
+    const hashedPassword = await bcrypt.hash(temporaryPassword, 10)
+
+    await pool.query('UPDATE users SET mot_de_passe = $1 WHERE id = $2', [hashedPassword, userId])
+
+    return res.json({
+      success: true,
+      message: 'Mot de passe réinitialisé',
+      temporaryPassword, // renvoyé une seule fois, non stocké en clair
+    })
   } catch (error) {
     return res.status(500).json({ error: error.message })
   }
@@ -1385,6 +1500,166 @@ app.delete('/api/projets/:id', requireRole(ROLE_GESTIONNAIRE), async (req, res) 
   }
 })
 
+// ============================================================================
+//  BESOIN #2 : GESTION DES MATÉRIAUX (CRUD réservé au GESTIONNAIRE)
+//  Toutes ces routes utilisent requireRole(ROLE_GESTIONNAIRE) : un technicien
+//  qui appellerait /api/materiaux recevrait un 403.
+// ============================================================================
+
+// Liste des matériaux (avec recherche optionnelle ?search= et filtre ?actif=)
+app.get('/api/materiaux', requireRole(ROLE_GESTIONNAIRE), async (req, res) => {
+  try {
+    const filters = []
+    const params = []
+
+    const search = typeof req.query.search === 'string' ? req.query.search.trim() : ''
+    if (search) {
+      params.push(`%${search}%`)
+      filters.push(`(m.nom ILIKE $${params.length} OR m.reference ILIKE $${params.length} OR m.categorie ILIKE $${params.length})`)
+    }
+
+    const actif = parseActiveFilter(req.query.actif)
+    if (actif !== null) {
+      params.push(actif)
+      filters.push(`m.actif = $${params.length}`)
+    }
+
+    const whereClause = filters.length ? `WHERE ${filters.join(' AND ')}` : ''
+    const result = await pool.query(
+      `SELECT m.* FROM materiaux m ${whereClause} ORDER BY m.nom ASC, m.id ASC`,
+      params,
+    )
+
+    return res.json({ success: true, count: result.rows.length, materiaux: result.rows.map(formatMaterialRow) })
+  } catch (error) {
+    return res.status(500).json({ error: error.message })
+  }
+})
+
+// Détail d'un matériau
+app.get('/api/materiaux/:id', requireRole(ROLE_GESTIONNAIRE), async (req, res) => {
+  try {
+    const id = parseInteger(req.params.id)
+    if (!id) return res.status(400).json({ error: 'Identifiant invalide' })
+
+    const result = await pool.query('SELECT * FROM materiaux WHERE id = $1 LIMIT 1', [id])
+    if (!result.rows[0]) return res.status(404).json({ error: 'Matériau introuvable' })
+
+    return res.json({ success: true, materiau: formatMaterialRow(result.rows[0]) })
+  } catch (error) {
+    return res.status(500).json({ error: error.message })
+  }
+})
+
+// Créer un matériau
+app.post('/api/materiaux', requireRole(ROLE_GESTIONNAIRE), async (req, res) => {
+  try {
+    const nom = typeof req.body.nom === 'string' ? req.body.nom.trim() : ''
+    if (!nom) {
+      return res.status(400).json({ error: 'Le nom du matériau est obligatoire' })
+    }
+
+    const reference = typeof req.body.reference === 'string' && req.body.reference.trim() ? req.body.reference.trim() : null
+    const description = typeof req.body.description === 'string' ? req.body.description.trim() : null
+    const categorie = typeof req.body.categorie === 'string' && req.body.categorie.trim() ? req.body.categorie.trim() : null
+    const quantiteStock = Number.isFinite(Number(req.body.quantite_stock ?? req.body.quantiteStock))
+      ? Math.trunc(Number(req.body.quantite_stock ?? req.body.quantiteStock))
+      : 0
+    const unite = typeof req.body.unite === 'string' && req.body.unite.trim() ? req.body.unite.trim() : 'unité'
+    const prixRaw = req.body.prix_unitaire ?? req.body.prixUnitaire
+    const prixUnitaire = prixRaw === undefined || prixRaw === null || prixRaw === '' ? null : Number(prixRaw)
+    if (prixUnitaire !== null && !Number.isFinite(prixUnitaire)) {
+      return res.status(400).json({ error: 'prix_unitaire invalide' })
+    }
+    const actif = req.body.actif === undefined ? true : Boolean(req.body.actif)
+
+    if (reference) {
+      const dup = await pool.query('SELECT id FROM materiaux WHERE reference = $1 LIMIT 1', [reference])
+      if (dup.rows.length) return res.status(409).json({ error: 'Cette référence existe déjà' })
+    }
+
+    const result = await pool.query(
+      `
+        INSERT INTO materiaux (reference, nom, description, categorie, quantite_stock, unite, prix_unitaire, actif)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        RETURNING *
+      `,
+      [reference, nom, description, categorie, quantiteStock, unite, prixUnitaire, actif],
+    )
+
+    return res.status(201).json({ success: true, materiau: formatMaterialRow(result.rows[0]) })
+  } catch (error) {
+    return res.status(500).json({ error: error.message })
+  }
+})
+
+// Modifier un matériau
+app.put('/api/materiaux/:id', requireRole(ROLE_GESTIONNAIRE), async (req, res) => {
+  try {
+    const id = parseInteger(req.params.id)
+    if (!id) return res.status(400).json({ error: 'Identifiant invalide' })
+
+    const existing = await pool.query('SELECT * FROM materiaux WHERE id = $1 LIMIT 1', [id])
+    if (!existing.rows[0]) return res.status(404).json({ error: 'Matériau introuvable' })
+    const current = existing.rows[0]
+
+    const nom = typeof req.body.nom === 'string' ? req.body.nom.trim() : current.nom
+    const reference = req.body.reference === undefined
+      ? current.reference
+      : (typeof req.body.reference === 'string' && req.body.reference.trim() ? req.body.reference.trim() : null)
+    const description = typeof req.body.description === 'string' ? req.body.description.trim() : current.description
+    const categorie = typeof req.body.categorie === 'string' ? req.body.categorie.trim() : current.categorie
+    const quantiteStock = (req.body.quantite_stock ?? req.body.quantiteStock) === undefined
+      ? current.quantite_stock
+      : Math.trunc(Number(req.body.quantite_stock ?? req.body.quantiteStock)) || 0
+    const unite = typeof req.body.unite === 'string' && req.body.unite.trim() ? req.body.unite.trim() : current.unite
+    const prixRaw = req.body.prix_unitaire ?? req.body.prixUnitaire
+    const prixUnitaire = prixRaw === undefined
+      ? current.prix_unitaire
+      : (prixRaw === null || prixRaw === '' ? null : Number(prixRaw))
+    if (prixUnitaire !== null && !Number.isFinite(Number(prixUnitaire))) {
+      return res.status(400).json({ error: 'prix_unitaire invalide' })
+    }
+    const actif = req.body.actif === undefined ? current.actif : Boolean(req.body.actif)
+
+    if (reference && reference !== current.reference) {
+      const dup = await pool.query('SELECT id FROM materiaux WHERE reference = $1 AND id <> $2 LIMIT 1', [reference, id])
+      if (dup.rows.length) return res.status(409).json({ error: 'Cette référence existe déjà' })
+    }
+
+    const result = await pool.query(
+      `
+        UPDATE materiaux
+        SET reference = $1, nom = $2, description = $3, categorie = $4,
+            quantite_stock = $5, unite = $6, prix_unitaire = $7, actif = $8,
+            updated_at = NOW()
+        WHERE id = $9
+        RETURNING *
+      `,
+      [reference, nom, description, categorie, quantiteStock, unite, prixUnitaire, actif, id],
+    )
+
+    return res.json({ success: true, materiau: formatMaterialRow(result.rows[0]) })
+  } catch (error) {
+    return res.status(500).json({ error: error.message })
+  }
+})
+
+// Supprimer un matériau
+app.delete('/api/materiaux/:id', requireRole(ROLE_GESTIONNAIRE), async (req, res) => {
+  try {
+    const id = parseInteger(req.params.id)
+    if (!id) return res.status(400).json({ error: 'Identifiant invalide' })
+
+    const result = await pool.query('DELETE FROM materiaux WHERE id = $1 RETURNING id', [id])
+    if (!result.rows.length) return res.status(404).json({ error: 'Matériau introuvable' })
+
+    return res.json({ success: true, message: 'Matériau supprimé' })
+  } catch (error) {
+    return res.status(500).json({ error: error.message })
+  }
+})
+
 app.get('/api/interventions', requireRole(ROLE_GESTIONNAIRE), async (req, res) => {
   try {
     const params = []
@@ -1411,6 +1686,11 @@ app.get('/api/interventions', requireRole(ROLE_GESTIONNAIRE), async (req, res) =
     const dateDebut = typeof req.query.dateDebut === 'string' ? req.query.dateDebut.trim() : ''
     const dateFin = typeof req.query.dateFin === 'string' ? req.query.dateFin.trim() : ''
 
+    // BESOIN #3 : les interventions pouvant durer plusieurs jours, on sélectionne
+    // toutes celles qui CHEVAUCHENT la période demandée, et pas seulement celles
+    // qui DÉBUTENT dedans. Une intervention chevauche [début, fin] si :
+    //   date_depart <= fin  ET  date_fin (= date_retour) >= début
+    // COALESCE(date_retour, date_depart) gère les anciennes interventions d'1 jour.
     if (semaine) {
       const startDate = new Date(semaine)
       if (Number.isNaN(startDate.getTime())) {
@@ -1419,18 +1699,13 @@ app.get('/api/interventions', requireRole(ROLE_GESTIONNAIRE), async (req, res) =
       const endDate = new Date(startDate)
       endDate.setDate(endDate.getDate() + 6)
       params.push(startDate.toISOString())
-      filters.push(`i.date_depart >= $${params.length}`)
+      const startParam = params.length
       params.push(endDate.toISOString())
-      filters.push(`i.date_depart < ($${params.length}::timestamptz + interval '1 day')`)
+      const endParam = params.length
+      filters.push(
+        `i.date_depart < ($${endParam}::timestamptz + interval '1 day') AND COALESCE(i.date_retour, i.date_depart) >= $${startParam}`,
+      )
     } else if (dateDebut || dateFin) {
-      if (dateDebut) {
-        const startDate = new Date(dateDebut)
-        if (Number.isNaN(startDate.getTime())) {
-          return res.status(400).json({ error: 'dateDebut invalide' })
-        }
-        params.push(startDate.toISOString())
-        filters.push(`i.date_depart >= $${params.length}`)
-      }
       if (dateFin) {
         const endDate = new Date(dateFin)
         if (Number.isNaN(endDate.getTime())) {
@@ -1438,6 +1713,14 @@ app.get('/api/interventions', requireRole(ROLE_GESTIONNAIRE), async (req, res) =
         }
         params.push(endDate.toISOString())
         filters.push(`i.date_depart < ($${params.length}::timestamptz + interval '1 day')`)
+      }
+      if (dateDebut) {
+        const startDate = new Date(dateDebut)
+        if (Number.isNaN(startDate.getTime())) {
+          return res.status(400).json({ error: 'dateDebut invalide' })
+        }
+        params.push(startDate.toISOString())
+        filters.push(`COALESCE(i.date_retour, i.date_depart) >= $${params.length}`)
       }
     }
 
@@ -1512,7 +1795,9 @@ app.post('/api/interventions', requireRole(ROLE_GESTIONNAIRE), async (req, res) 
     const description = typeof req.body.description === 'string' ? req.body.description.trim() : null
     const lieuDepart = typeof req.body.lieu_depart === 'string' ? req.body.lieu_depart.trim() : typeof req.body.lieuDepart === 'string' ? req.body.lieuDepart.trim() : ''
     const lieuArrivee = typeof req.body.lieu_arrivee === 'string' ? req.body.lieu_arrivee.trim() : typeof req.body.lieuArrivee === 'string' ? req.body.lieuArrivee.trim() : ''
-    const dateDepartInput = req.body.date_depart ?? req.body.dateDepart
+    const dateDepartInput = req.body.date_depart ?? req.body.dateDepart ?? req.body.date_debut ?? req.body.dateDebut
+    // BESOIN #3 : date de fin (= date_retour). On accepte plusieurs noms pour rester souple.
+    const dateRetourInput = req.body.date_retour ?? req.body.dateRetour ?? req.body.date_fin ?? req.body.dateFin
     const statut = typeof req.body.statut === 'string' ? req.body.statut.trim() : 'PLANIFIEE'
 
     console.log('[POST /api/interventions] technicienId parsé:', technicienId)
@@ -1572,6 +1857,19 @@ app.post('/api/interventions', requireRole(ROLE_GESTIONNAIRE), async (req, res) 
       return res.status(400).json({ error: 'date_depart invalide' })
     }
 
+    // Date de fin : si absente, on prend la date de début (intervention d'un seul jour).
+    let dateRetour = dateDepart
+    if (dateRetourInput !== undefined && dateRetourInput !== null && dateRetourInput !== '') {
+      const parsedRetour = new Date(dateRetourInput)
+      if (Number.isNaN(parsedRetour.getTime())) {
+        return res.status(400).json({ error: 'date_fin invalide' })
+      }
+      if (parsedRetour < dateDepart) {
+        return res.status(400).json({ error: 'La date de fin doit être postérieure ou égale à la date de début' })
+      }
+      dateRetour = parsedRetour
+    }
+
     const result = await pool.query(
       `
         INSERT INTO interventions (
@@ -1581,12 +1879,13 @@ app.post('/api/interventions', requireRole(ROLE_GESTIONNAIRE), async (req, res) 
           lieu_depart,
           lieu_arrivee,
           date_depart,
+          date_retour,
           statut
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         RETURNING id
       `,
-      [resolvedTechnicianId, titre, description, lieuDepart, lieuArrivee, dateDepart.toISOString(), statut],
+      [resolvedTechnicianId, titre, description, lieuDepart, lieuArrivee, dateDepart.toISOString(), dateRetour.toISOString(), statut],
     )
 
     const created = await pool.query(
@@ -1632,7 +1931,8 @@ app.put('/api/interventions/:id', requireRole(ROLE_GESTIONNAIRE), async (req, re
     const lieuDepart = typeof req.body.lieu_depart === 'string' ? req.body.lieu_depart.trim() : typeof req.body.lieuDepart === 'string' ? req.body.lieuDepart.trim() : null
     const lieuArrivee = typeof req.body.lieu_arrivee === 'string' ? req.body.lieu_arrivee.trim() : typeof req.body.lieuArrivee === 'string' ? req.body.lieuArrivee.trim() : null
     const statut = typeof req.body.statut === 'string' ? req.body.statut.trim() : null
-    const dateDepartInput = req.body.date_depart ?? req.body.dateDepart
+    const dateDepartInput = req.body.date_depart ?? req.body.dateDepart ?? req.body.date_debut ?? req.body.dateDebut
+    const dateRetourInput = req.body.date_retour ?? req.body.dateRetour ?? req.body.date_fin ?? req.body.dateFin
 
     let dateDepart = null
     if (dateDepartInput !== undefined && dateDepartInput !== null && dateDepartInput !== '') {
@@ -1641,6 +1941,16 @@ app.put('/api/interventions/:id', requireRole(ROLE_GESTIONNAIRE), async (req, re
         return res.status(400).json({ error: 'date_depart invalide' })
       }
       dateDepart = parsed.toISOString()
+    }
+
+    // BESOIN #3 : date de fin (date_retour) modifiable.
+    let dateRetour = null
+    if (dateRetourInput !== undefined && dateRetourInput !== null && dateRetourInput !== '') {
+      const parsed = new Date(dateRetourInput)
+      if (Number.isNaN(parsed.getTime())) {
+        return res.status(400).json({ error: 'date_fin invalide' })
+      }
+      dateRetour = parsed.toISOString()
     }
 
     let resolvedUpdateTechnicianId = technicienId
@@ -1687,11 +1997,12 @@ app.put('/api/interventions/:id', requireRole(ROLE_GESTIONNAIRE), async (req, re
           lieu_depart = COALESCE($4, lieu_depart),
           lieu_arrivee = COALESCE($5, lieu_arrivee),
           date_depart = COALESCE($6, date_depart),
-          statut = COALESCE($7, statut)
+          statut = COALESCE($7, statut),
+          date_retour = COALESCE($9, date_retour)
         WHERE id = $8
         RETURNING id
       `,
-      [resolvedUpdateTechnicianId, titre, description, lieuDepart, lieuArrivee, dateDepart, statut, interventionId],
+      [resolvedUpdateTechnicianId, titre, description, lieuDepart, lieuArrivee, dateDepart, statut, interventionId, dateRetour],
     )
 
     const updated = await pool.query(
@@ -2091,6 +2402,37 @@ app.get('/api/technicien/me', requireRole(ROLE_TECHNICIEN), async (req, res) => 
   }
 })
 
+// Le TECHNICIEN change SON PROPRE mot de passe.
+// On exige l'ancien mot de passe pour confirmer l'identité.
+app.put('/api/technicien/password', requireRole(ROLE_TECHNICIEN), async (req, res) => {
+  try {
+    const ancien = typeof req.body.ancien_mot_de_passe === 'string' ? req.body.ancien_mot_de_passe : ''
+    const nouveau = typeof req.body.nouveau_mot_de_passe === 'string' ? req.body.nouveau_mot_de_passe : ''
+
+    if (!ancien || !nouveau) {
+      return res.status(400).json({ error: 'Ancien et nouveau mot de passe sont obligatoires' })
+    }
+    if (nouveau.length < 6) {
+      return res.status(400).json({ error: 'Le nouveau mot de passe doit contenir au moins 6 caractères' })
+    }
+
+    // On relit le hash courant en base (req.auth.user ne contient pas le mot de passe).
+    const current = await pool.query('SELECT mot_de_passe FROM users WHERE id = $1 LIMIT 1', [req.auth.user.id])
+    const storedPassword = current.rows[0]?.mot_de_passe
+    const valid = await verifyPassword(ancien, storedPassword)
+    if (!valid) {
+      return res.status(401).json({ error: 'Ancien mot de passe incorrect' })
+    }
+
+    const hashedPassword = await bcrypt.hash(nouveau, 10)
+    await pool.query('UPDATE users SET mot_de_passe = $1 WHERE id = $2', [hashedPassword, req.auth.user.id])
+
+    return res.json({ success: true, message: 'Mot de passe mis à jour' })
+  } catch (error) {
+    return res.status(500).json({ error: error.message })
+  }
+})
+
 app.get('/api/technicien/interventions', requireRole(ROLE_TECHNICIEN), async (req, res) => {
   try {
     const technician = await getTechnicianOrFail(req.auth.user.id)
@@ -2155,6 +2497,8 @@ app.post('/api/technicien/frais', requireRole(ROLE_TECHNICIEN), async (req, res)
       date_frais,
       description = null,
       devise = 'MAD',
+      justificatif = null,      // data URL base64 du fichier (image/PDF)
+      justificatif_nom = null,  // nom d'origine du fichier (facultatif)
     } = req.body
 
     if (!type_frais || montant === undefined || !date_frais) {
@@ -2163,29 +2507,23 @@ app.post('/api/technicien/frais', requireRole(ROLE_TECHNICIEN), async (req, res)
       })
     }
 
-    const normalizedTypeFrais = String(type_frais).toUpperCase()
-
-    let interventionId = parseInteger(providedInterventionId)
-    if (!interventionId) {
-      const fallback = await pool.query(
-        `
-          SELECT id
-          FROM interventions
-          WHERE technicien_id = $1
-          ORDER BY date_depart DESC, id DESC
-          LIMIT 1
-        `,
-        [technician.technician_id],
-      )
-
-      interventionId = fallback.rows[0]?.id || null
-    }
-
+    // BESOIN #4 : la mission (intervention) est désormais OBLIGATOIRE et
+    // explicitement choisie par le technicien (plus de rattachement automatique).
+    const interventionId = parseInteger(providedInterventionId)
     if (!interventionId) {
       return res.status(400).json({
-        error: 'Aucune intervention disponible pour rattacher cette note de frais',
+        error: 'Veuillez sélectionner la mission liée à cette demande de frais',
       })
     }
+
+    // BESOIN #4 : le justificatif est obligatoire pour valider la demande.
+    if (!justificatif) {
+      return res.status(400).json({
+        error: 'Un justificatif (image ou PDF) est obligatoire',
+      })
+    }
+
+    const normalizedTypeFrais = String(type_frais).toUpperCase()
 
     const ownershipCheck = await pool.query(
       'SELECT id FROM interventions WHERE id = $1 AND technicien_id = $2 LIMIT 1',
@@ -2194,9 +2532,13 @@ app.post('/api/technicien/frais', requireRole(ROLE_TECHNICIEN), async (req, res)
 
     if (!ownershipCheck.rows.length) {
       return res.status(403).json({
-        error: 'Cette intervention ne vous appartient pas',
+        error: 'Cette mission ne vous appartient pas',
       })
     }
+
+    // On enregistre le fichier sur le disque ; saveBase64Justificatif lève une
+    // erreur explicite si le format/type/taille n'est pas valide.
+    const justificatifUrl = saveBase64Justificatif(justificatif)
 
     const insertResult = await pool.query(
       `
@@ -2207,9 +2549,11 @@ app.post('/api/technicien/frais', requireRole(ROLE_TECHNICIEN), async (req, res)
           devise,
           date_frais,
           description,
+          justificatif_url,
+          justificatif_nom,
           statut_validation
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
         RETURNING *
       `,
       [
@@ -2219,6 +2563,8 @@ app.post('/api/technicien/frais', requireRole(ROLE_TECHNICIEN), async (req, res)
         devise,
         date_frais,
         description,
+        justificatifUrl,
+        justificatif_nom,
         EXPENSE_STATUS_PENDING,
       ],
     )

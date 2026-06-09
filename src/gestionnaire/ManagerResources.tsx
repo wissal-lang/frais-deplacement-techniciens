@@ -47,7 +47,9 @@ function projectStatusLabel(status: string) {
 }
 
 const EMPTY_NEW_TECH = { name: '', email: '', phone: '', matricule: '', password: '' }
-const EMPTY_EDIT_TECH = { name: '', email: '', phone: '', matricule: '', password: '' }
+// Note : pas de champ "password" ici. Le gestionnaire n'a PAS le droit de
+// changer le mot de passe d'un technicien — il peut seulement le réinitialiser.
+const EMPTY_EDIT_TECH = { name: '', email: '', phone: '', matricule: '' }
 
 export default function ManagerResources() {
   const [technicians, setTechnicians] = useState<TechnicianRow[]>([])
@@ -67,6 +69,10 @@ export default function ManagerResources() {
 
   // État suppression technicien
   const [deletingId, setDeletingId] = useState<number | null>(null)
+
+  // État réinitialisation mot de passe (affichage du mot de passe temporaire généré)
+  const [isResettingPassword, setIsResettingPassword] = useState(false)
+  const [temporaryPassword, setTemporaryPassword] = useState<string | null>(null)
 
   const [newProject, setNewProject] = useState({ name: '', client: '', location: '' })
 
@@ -132,12 +138,12 @@ export default function ManagerResources() {
   // ── Ouvrir la modale de modification ────────────────────────────────────────
   const openEdit = (tech: TechnicianRow) => {
     setEditingTech(tech)
+    setTemporaryPassword(null)
     setEditForm({
       name: [tech.nom, tech.prenom].filter(Boolean).join(' '),
       email: tech.email,
       phone: tech.telephone || '',
       matricule: tech.matricule || '',
-      password: '',
     })
     setIsEditOpen(true)
   }
@@ -163,7 +169,7 @@ export default function ManagerResources() {
           email: editForm.email,
           telephone: editForm.phone,
           matricule: editForm.matricule || undefined,
-          ...(editForm.password ? { password: editForm.password } : {}),
+          // Pas de mot de passe : interdit pour un technicien (règle métier).
         },
       })
       setIsEditOpen(false)
@@ -174,6 +180,29 @@ export default function ManagerResources() {
       toast.error(error instanceof Error ? error.message : 'Impossible de modifier le technicien')
     } finally {
       setIsSaving(false)
+    }
+  }
+
+  // ── Réinitialiser le mot de passe d'un technicien ───────────────────────────
+  // Le gestionnaire ne choisit pas le mot de passe : le serveur en génère un
+  // temporaire et le renvoie une seule fois pour qu'on le communique au technicien.
+  const handleResetPassword = async () => {
+    if (!editingTech) return
+    const token = getManagerToken()
+    if (!token) { toast.error('Session expirée'); return }
+    setIsResettingPassword(true)
+    setTemporaryPassword(null)
+    try {
+      const res = await apiFetch<{ temporaryPassword: string }>(
+        `/api/users/${editingTech.id}/reset-password`,
+        { method: 'POST', token },
+      )
+      setTemporaryPassword(res.temporaryPassword)
+      toast.success('Mot de passe réinitialisé')
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Réinitialisation impossible')
+    } finally {
+      setIsResettingPassword(false)
     }
   }
 
@@ -580,15 +609,26 @@ export default function ManagerResources() {
                   placeholder="Optionnel"
                 />
               </div>
-              <div>
-                <Label htmlFor="edit-password">Nouveau mot de passe</Label>
-                <Input
-                  id="edit-password"
-                  type="password"
-                  value={editForm.password}
-                  onChange={(e) => setEditForm({ ...editForm, password: e.target.value })}
-                  placeholder="Laisser vide pour ne pas changer"
-                />
+              <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
+                <Label className="mb-1 block">Mot de passe</Label>
+                <p className="mb-3 text-xs text-gray-500">
+                  Vous ne pouvez pas définir le mot de passe d'un technicien. Vous pouvez le
+                  réinitialiser : un mot de passe temporaire sera généré et affiché une seule fois.
+                </p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={handleResetPassword}
+                  disabled={isResettingPassword}
+                >
+                  {isResettingPassword ? 'Réinitialisation...' : 'Réinitialiser le mot de passe'}
+                </Button>
+                {temporaryPassword && (
+                  <div className="mt-3 rounded-md border border-green-300 bg-green-50 p-3">
+                    <p className="text-xs text-green-700">Mot de passe temporaire (à communiquer au technicien) :</p>
+                    <p className="mt-1 select-all font-mono text-lg font-bold text-green-900">{temporaryPassword}</p>
+                  </div>
+                )}
               </div>
               <div className="flex gap-3 pt-2">
                 <Button variant="outline" className="flex-1" onClick={() => setIsEditOpen(false)} disabled={isSaving}>

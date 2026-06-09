@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ChevronLeft, Send, FileText } from 'lucide-react'
+import { ChevronLeft, Send, FileText, Paperclip } from 'lucide-react'
 import { Card } from '../ui/card'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
@@ -9,7 +9,7 @@ import { Input } from '../ui/input'
 import { Textarea } from '../ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
 import { toast } from 'sonner'
-import { apiFetch, ApiError } from '../lib/api'
+import { apiFetch, ApiError, API_BASE_URL } from '../lib/api'
 import { getTechnicianToken } from './technicianSession'
 
 interface ApiExpense {
@@ -19,6 +19,24 @@ interface ApiExpense {
   dateFrais: string | null
   description: string
   statutValidation: string
+  mission: string
+  justificatifUrl: string | null
+}
+
+interface Mission {
+  id: number
+  titre: string
+  dateDepart: string | null
+}
+
+// Lit un fichier et le convertit en data URL base64 (envoyée dans le JSON).
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result as string)
+    reader.onerror = () => reject(new Error('Lecture du fichier impossible'))
+    reader.readAsDataURL(file)
+  })
 }
 
 const expenseTypes = [
@@ -50,19 +68,28 @@ function formatDate(iso: string | null): string {
 export default function TechnicianExpenseRequest() {
   const navigate = useNavigate()
   const [selectedType, setSelectedType] = useState('')
+  const [selectedMission, setSelectedMission] = useState('')
   const [amount, setAmount] = useState('')
   const [date, setDate] = useState('')
   const [description, setDescription] = useState('')
+  const [justificatif, setJustificatif] = useState<{ data: string; name: string } | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [requests, setRequests] = useState<ApiExpense[]>([])
+  const [missions, setMissions] = useState<Mission[]>([])
   const [isLoading, setIsLoading] = useState(true)
 
   const loadRequests = async () => {
     const token = getTechnicianToken()
     if (!token) return
     try {
-      const data = await apiFetch<ApiExpense[]>('/api/technicien/frais', { token })
-      setRequests(data)
+      // On charge en parallèle l'historique des frais ET les missions (interventions)
+      // du technicien pour alimenter le menu déroulant "Mission liée".
+      const [expenses, interventions] = await Promise.all([
+        apiFetch<ApiExpense[]>('/api/technicien/frais', { token }),
+        apiFetch<Mission[]>('/api/technicien/interventions', { token }),
+      ])
+      setRequests(expenses)
+      setMissions(interventions)
     } catch {
       // silent — list just stays empty
     } finally {
@@ -74,11 +101,35 @@ export default function TechnicianExpenseRequest() {
     loadRequests()
   }, [])
 
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) {
+      setJustificatif(null)
+      return
+    }
+    // Garde-fou taille côté client : 5 Mo (le serveur revérifie).
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error('Fichier trop volumineux (5 Mo maximum)')
+      e.target.value = ''
+      return
+    }
+    try {
+      const data = await readFileAsDataUrl(file)
+      setJustificatif({ data, name: file.name })
+    } catch {
+      toast.error('Impossible de lire le fichier')
+    }
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
 
-    if (!selectedType || !amount || !date || !description) {
+    if (!selectedMission || !selectedType || !amount || !date || !description) {
       toast.error('Veuillez remplir tous les champs obligatoires')
+      return
+    }
+    if (!justificatif) {
+      toast.error('Veuillez joindre un justificatif (image ou PDF)')
       return
     }
 
@@ -94,11 +145,14 @@ export default function TechnicianExpenseRequest() {
         method: 'POST',
         token,
         body: {
+          intervention_id: Number(selectedMission),
           type_frais: selectedType,
           montant: parseFloat(amount),
           date_frais: date,
           description,
           devise: 'MAD',
+          justificatif: justificatif.data,
+          justificatif_nom: justificatif.name,
         },
       })
 
@@ -106,10 +160,12 @@ export default function TechnicianExpenseRequest() {
         description: 'Vous serez notifié de la validation',
       })
 
+      setSelectedMission('')
       setSelectedType('')
       setAmount('')
       setDate('')
       setDescription('')
+      setJustificatif(null)
       await loadRequests()
     } catch (err) {
       const message =
@@ -146,6 +202,31 @@ export default function TechnicianExpenseRequest() {
           </h2>
 
           <form onSubmit={handleSubmit} className="space-y-5">
+            <div>
+              <Label className="text-base font-bold mb-2 block">Mission liée *</Label>
+              <Select value={selectedMission} onValueChange={setSelectedMission}>
+                <SelectTrigger className="h-14 text-lg">
+                  <SelectValue placeholder="Sélectionnez la mission" />
+                </SelectTrigger>
+                <SelectContent>
+                  {missions.length === 0 ? (
+                    <SelectItem value="none" disabled className="text-lg py-3">
+                      Aucune mission assignée
+                    </SelectItem>
+                  ) : (
+                    missions.map((mission) => (
+                      <SelectItem key={mission.id} value={String(mission.id)} className="text-lg py-3">
+                        {mission.titre}
+                        {mission.dateDepart
+                          ? ` — ${new Date(mission.dateDepart).toLocaleDateString('fr-FR')}`
+                          : ''}
+                      </SelectItem>
+                    ))
+                  )}
+                </SelectContent>
+              </Select>
+            </div>
+
             <div>
               <Label className="text-base font-bold mb-2 block">Type de frais *</Label>
               <Select value={selectedType} onValueChange={setSelectedType}>
@@ -195,6 +276,27 @@ export default function TechnicianExpenseRequest() {
               />
             </div>
 
+            <div>
+              <Label className="text-base font-bold mb-2 block">Justificatif * (image ou PDF)</Label>
+              <label
+                htmlFor="justificatif"
+                className="flex h-14 cursor-pointer items-center gap-3 rounded-md border border-input bg-background px-4 text-lg text-gray-600 hover:bg-gray-50"
+              >
+                <Paperclip className="h-5 w-5 text-purple-500" />
+                <span className="truncate">{justificatif ? justificatif.name : 'Choisir un fichier...'}</span>
+              </label>
+              <input
+                id="justificatif"
+                type="file"
+                accept="image/*,application/pdf"
+                onChange={handleFileChange}
+                className="hidden"
+              />
+              {justificatif && (
+                <p className="mt-2 text-sm text-green-600">Fichier prêt à être envoyé.</p>
+              )}
+            </div>
+
             <Button
               type="submit"
               disabled={isSubmitting}
@@ -227,10 +329,24 @@ export default function TechnicianExpenseRequest() {
                           </h3>
                           <Badge className={`${badge.color} border`}>{badge.label}</Badge>
                         </div>
+                        {req.mission ? (
+                          <p className="text-sm font-medium text-purple-700 mb-1">Mission : {req.mission}</p>
+                        ) : null}
                         <p className="text-sm text-gray-600 mb-1 capitalize">
                           {formatDate(req.dateFrais)}
                         </p>
                         <p className="text-sm text-gray-700">{req.description}</p>
+                        {req.justificatifUrl ? (
+                          <a
+                            href={`${API_BASE_URL}${req.justificatifUrl}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="mt-2 inline-flex items-center gap-1 text-sm font-medium text-blue-600 hover:underline"
+                          >
+                            <Paperclip className="h-4 w-4" />
+                            Voir le justificatif
+                          </a>
+                        ) : null}
                       </div>
                       <div className="text-right ml-4">
                         <p className="text-2xl font-bold text-gray-900">

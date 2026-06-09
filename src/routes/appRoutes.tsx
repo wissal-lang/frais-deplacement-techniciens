@@ -8,12 +8,14 @@ import TechnicianDashboard from '../technicien/TechnicianDashboard'
 import TechnicianDailyForm from '../technicien/TechnicianDailyFormNew'
 import TechnicianExpenses from '../technicien/TechnicianExpenses'
 import TechnicianExpenseRequest from '../technicien/TechnicianExpenseRequest'
+import TechnicianProfile from '../technicien/TechnicianProfile'
 import RequireTechnicianAuth from '../technicien/RequireTechnicianAuth'
 
 // Gestionnaire routes
 import ManagerLogin from '../gestionnaire/ManagerLogin'
 import ManagerDashboard from '../gestionnaire/ManagerDashboard'
 import ManagerResources from '../gestionnaire/ManagerResources'
+import ManagerMaterials from '../gestionnaire/ManagerMaterials'
 import ManagerPlanning from '../gestionnaire/ManagerPlanningDragDrop'
 import ManagerValidation from '../gestionnaire/ManagerValidation'
 import ManagerPayments from '../gestionnaire/ManagerPayments'
@@ -38,6 +40,7 @@ export const router = createBrowserRouter([
             path: 'technicien/demande-frais',
             Component: TechnicianExpenseRequest,
           },
+          { path: 'technicien/profil', Component: TechnicianProfile },
         ],
       },
 
@@ -48,6 +51,7 @@ export const router = createBrowserRouter([
         children: [
           { path: 'gestionnaire/dashboard', Component: ManagerDashboard },
           { path: 'gestionnaire/ressources', Component: ManagerResources },
+          { path: 'gestionnaire/materiaux', Component: ManagerMaterials },
           { path: 'gestionnaire/planning', Component: ManagerPlanning },
           { path: 'gestionnaire/validation', Component: ManagerValidation },
           { path: 'gestionnaire/paiements', Component: ManagerPayments },

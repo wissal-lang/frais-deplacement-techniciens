@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Calendar, Clock, MapPin, LogOut, Plus, Euro, FileText, CheckCircle, AlertCircle, PlayCircle } from 'lucide-react'
+import { Calendar, Clock, MapPin, LogOut, Plus, Euro, FileText, CheckCircle, AlertCircle, PlayCircle, KeyRound } from 'lucide-react'
 import { Button } from '../ui/button'
 import { Card } from '../ui/card'
 import { clearTechnicianSession, getTechnicianToken } from './technicianSession'
@@ -137,13 +137,24 @@ export default function TechnicianDashboard() {
               {userName ? `Bonjour, ${userName}` : 'Chargement...'}
             </p>
           </div>
-          <button
-            type="button"
-            onClick={handleLogout}
-            className="p-3 bg-blue-700 rounded-full hover:bg-blue-800"
-          >
-            <LogOut className="w-6 h-6" />
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => navigate('/technicien/profil')}
+              className="p-3 bg-blue-700 rounded-full hover:bg-blue-800"
+              title="Mon profil / mot de passe"
+            >
+              <KeyRound className="w-6 h-6" />
+            </button>
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="p-3 bg-blue-700 rounded-full hover:bg-blue-800"
+              title="Déconnexion"
+            >
+              <LogOut className="w-6 h-6" />
+            </button>
+          </div>
         </div>
       </div>
 

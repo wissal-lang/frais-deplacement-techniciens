@@ -83,8 +83,25 @@ CREATE TABLE IF NOT EXISTS frais_deplacement (
   devise            VARCHAR(10) NOT NULL DEFAULT 'MAD',
   date_frais        DATE NOT NULL,
   description       TEXT,
+  justificatif_url  TEXT,
+  justificatif_nom  TEXT,
   statut_validation VARCHAR(50) NOT NULL DEFAULT 'EN_ATTENTE',
   created_at        TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Catalogue de matériaux géré par le gestionnaire (CRUD).
+CREATE TABLE IF NOT EXISTS materiaux (
+  id             SERIAL PRIMARY KEY,
+  reference      VARCHAR(100) UNIQUE,
+  nom            VARCHAR(255) NOT NULL,
+  description    TEXT,
+  categorie      VARCHAR(100),
+  quantite_stock INTEGER NOT NULL DEFAULT 0,
+  unite          VARCHAR(50) DEFAULT 'unité',
+  prix_unitaire  NUMERIC(10, 2),
+  actif          BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at     TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at     TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
 -- Audit trail for expense validations and payments
@@ -106,3 +123,5 @@ CREATE INDEX IF NOT EXISTS idx_rapports_technicien    ON rapports(technicien_id)
 CREATE INDEX IF NOT EXISTS idx_frais_intervention     ON frais_deplacement(intervention_id);
 CREATE INDEX IF NOT EXISTS idx_frais_statut           ON frais_deplacement(statut_validation);
 CREATE INDEX IF NOT EXISTS idx_validations_frais_id   ON validations(frais_id);
+CREATE INDEX IF NOT EXISTS idx_materiaux_nom          ON materiaux(nom);
+CREATE INDEX IF NOT EXISTS idx_materiaux_categorie    ON materiaux(categorie);

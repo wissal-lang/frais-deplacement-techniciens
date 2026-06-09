@@ -1,6 +1,6 @@
 import { useNavigate, useLocation } from 'react-router-dom';
 import type { ReactNode } from 'react';
-import { LayoutDashboard, Users, Calendar, CheckSquare, LogOut, CreditCard } from 'lucide-react';
+import { LayoutDashboard, Users, Calendar, CheckSquare, LogOut, CreditCard, Package } from 'lucide-react';
 import { Button } from '../ui/button';
 import { clearManagerSession } from './managerSession';
 
@@ -15,6 +15,7 @@ export default function ManagerLayout({ children }: ManagerLayoutProps) {
   const navigation = [
     { name: 'Tableau de bord', path: '/gestionnaire/dashboard', icon: LayoutDashboard },
     { name: 'Ressources', path: '/gestionnaire/ressources', icon: Users },
+    { name: 'Matériaux', path: '/gestionnaire/materiaux', icon: Package },
     { name: 'Planning Hebdo', path: '/gestionnaire/planning', icon: Calendar },
     { name: 'Validation', path: '/gestionnaire/validation', icon: CheckSquare },
     { name: 'Paiements', path: '/gestionnaire/paiements', icon: CreditCard },

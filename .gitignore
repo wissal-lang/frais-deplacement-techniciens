@@ -11,6 +11,9 @@ node_modules
 dist
 dist-ssr
 *.local
+
+# Fichiers téléversés (justificatifs de frais)
+uploads
 .env
 .env.*
 !.env.example

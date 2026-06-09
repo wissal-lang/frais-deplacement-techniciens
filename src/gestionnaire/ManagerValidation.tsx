@@ -7,9 +7,9 @@ import { Textarea } from '../ui/textarea'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../ui/dialog'
 import { Label } from '../ui/label'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs'
-import { CheckCircle, XCircle, Clock, FileText, Calendar, Euro } from 'lucide-react'
+import { CheckCircle, XCircle, Clock, FileText, Calendar, Euro, Paperclip } from 'lucide-react'
 import { toast } from 'sonner'
-import { apiFetch } from '../lib/api'
+import { apiFetch, API_BASE_URL } from '../lib/api'
 import { getManagerToken } from './managerSession'
 
 // ─── Types rapports ───────────────────────────────────────────────────────────
@@ -59,6 +59,8 @@ interface ApiExpense {
   description: string
   mission: string
   technicien: string
+  justificatifUrl: string | null
+  justificatifNom: string | null
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -374,6 +376,19 @@ export default function ManagerValidation() {
                           )}
                           {expense.description && (
                             <p className="text-gray-700 mt-1">{expense.description}</p>
+                          )}
+                          {expense.justificatifUrl ? (
+                            <a
+                              href={`${API_BASE_URL}${expense.justificatifUrl}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="mt-2 inline-flex items-center gap-1 text-sm font-medium text-blue-600 hover:underline"
+                            >
+                              <Paperclip className="w-4 h-4" />
+                              {expense.justificatifNom || 'Voir le justificatif'}
+                            </a>
+                          ) : (
+                            <p className="mt-2 text-sm text-red-500">Aucun justificatif</p>
                           )}
                         </div>
                       </div>

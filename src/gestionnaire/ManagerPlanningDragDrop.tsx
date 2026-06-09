@@ -78,6 +78,7 @@ interface InterventionFormState {
   lieuDepart: string
   lieuArrivee: string
   dateDepart: string
+  dateFin: string
   statut: string
 }
 
@@ -169,22 +170,33 @@ function getProjectColor(title: string) {
   return 'border-gray-300 bg-gray-50 text-gray-800'
 }
 
-function interventionStartsOnDay(intervention: PlanningIntervention, dayKey: string) {
-  if (!intervention.dateDepart) return false
-  return toDateKey(new Date(intervention.dateDepart)) === dayKey
+// Nombre de jours (entiers) entre deux clés "YYYY-MM-DD".
+function dayDiff(fromKey: string, toKey: string) {
+  const from = parseDateInput(fromKey)
+  const to = parseDateInput(toKey)
+  if (!from || !to) return 0
+  return Math.round((to.getTime() - from.getTime()) / (24 * 60 * 60 * 1000))
 }
 
-function isSameDay(dateA: string | null, dateB: Date) {
-  if (!dateA) return false
-  return toDateKey(new Date(dateA)) === toDateKey(dateB)
+// BESOIN #3 : une intervention "couvre" un jour si ce jour est compris entre
+// sa date de début et sa date de fin (incluses). Sert à l'afficher sur chaque
+// jour qu'elle occupe, pas seulement le premier.
+function interventionCoversDay(intervention: PlanningIntervention, dayKey: string) {
+  if (!intervention.dateDepart) return false
+  const startKey = toDateKey(new Date(intervention.dateDepart))
+  const endKey = intervention.dateRetour ? toDateKey(new Date(intervention.dateRetour)) : startKey
+  // Les clés "YYYY-MM-DD" se comparent correctement en ordre lexicographique.
+  return dayKey >= startKey && dayKey <= endKey
 }
 
 function InterventionCard({
   intervention,
+  dayKey,
   onEdit,
   onDelete,
 }: {
   intervention: PlanningIntervention
+  dayKey: string
   onEdit: (intervention: PlanningIntervention) => void
   onDelete: (intervention: PlanningIntervention) => void
 }) {
@@ -205,18 +217,35 @@ function InterventionCard({
 
   const startDate = intervention.dateDepart ? new Date(intervention.dateDepart) : null
 
+  // BESOIN #3 : calcul de la durée pour afficher "Jour X/N" et marquer les
+  // jours de continuation (la carte est rendue sur chaque jour couvert).
+  const startKey = startDate ? toDateKey(startDate) : dayKey
+  const endKey = intervention.dateRetour ? toDateKey(new Date(intervention.dateRetour)) : startKey
+  const totalDays = dayDiff(startKey, endKey) + 1
+  const currentDay = dayDiff(startKey, dayKey) + 1
+  const isMultiDay = totalDays > 1
+  const isStartDay = dayKey === startKey
+
   return (
     <div
       ref={drag}
       className={`rounded-xl border p-3 shadow-sm transition-all cursor-grab active:cursor-grabbing ${getProjectColor(
         intervention.titre,
-      )} ${isDragging ? 'opacity-40 scale-[0.98]' : ''}`}
+      )} ${isDragging ? 'opacity-40 scale-[0.98]' : ''} ${!isStartDay ? 'border-dashed opacity-90' : ''}`}
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="font-semibold text-sm truncate">{intervention.titre}</p>
+          <p className="font-semibold text-sm truncate">
+            {!isStartDay && <span className="mr-1">↳</span>}
+            {intervention.titre}
+          </p>
+          {isMultiDay && (
+            <span className="mt-1 inline-block rounded-full bg-black/10 px-2 py-0.5 text-[11px] font-semibold">
+              Jour {currentDay}/{totalDays}
+            </span>
+          )}
           <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs opacity-80">
-            {startDate && (
+            {startDate && isStartDay && (
               <span className="inline-flex items-center gap-1">
                 <Clock3 className="h-3.5 w-3.5" />
                 {startDate.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
@@ -305,7 +334,7 @@ function DayCell({
     [day.date, technician.id, onDropIntervention],
   )
 
-  const cellInterventions = interventions.filter((intervention) => interventionStartsOnDay(intervention, day.key))
+  const cellInterventions = interventions.filter((intervention) => interventionCoversDay(intervention, day.key))
 
   return (
     <td
@@ -341,6 +370,7 @@ function DayCell({
               <InterventionCard
                 key={intervention.id}
                 intervention={intervention}
+                dayKey={day.key}
                 onEdit={onEdit}
                 onDelete={onDelete}
               />
@@ -376,6 +406,7 @@ export default function ManagerPlanningDragDrop() {
     lieuDepart: '',
     lieuArrivee: '',
     dateDepart: '',
+    dateFin: '',
     statut: 'PLANIFIEE',
   })
 
@@ -395,7 +426,7 @@ export default function ManagerPlanningDragDrop() {
         accumulator[`${technician.id}-${day.key}`] = interventions.filter(
           (intervention) =>
             intervention.technicienId === technician.id &&
-            interventionStartsOnDay(intervention, day.key),
+            interventionCoversDay(intervention, day.key),
         )
       }
       return accumulator
@@ -438,13 +469,15 @@ export default function ManagerPlanningDragDrop() {
     setEditingInterventionId(null)
     setPrefillTechnicianId(technicianId)
     setPrefillDate(date)
+    const startInput = toInputDateTimeString(mergeDateWithTime(date))
     setForm({
       technicienId: String(technicianId),
       titre: '',
       description: '',
       lieuDepart: '',
       lieuArrivee: '',
-      dateDepart: toInputDateTimeString(mergeDateWithTime(date)),
+      dateDepart: startInput,
+      dateFin: startInput, // par défaut : intervention d'une seule journée
       statut: 'PLANIFIEE',
     })
     setDialogOpen(true)
@@ -454,13 +487,15 @@ export default function ManagerPlanningDragDrop() {
     setEditingInterventionId(intervention.id)
     setPrefillTechnicianId(intervention.technicienId)
     setPrefillDate(intervention.dateDepart ? new Date(intervention.dateDepart) : null)
+    const startInput = intervention.dateDepart ? normalizeInputDateTime(intervention.dateDepart) : ''
     setForm({
       technicienId: String(intervention.technicienId),
       titre: intervention.titre,
       description: intervention.description || '',
       lieuDepart: intervention.lieuDepart || '',
       lieuArrivee: intervention.lieuArrivee || '',
-      dateDepart: intervention.dateDepart ? normalizeInputDateTime(intervention.dateDepart) : '',
+      dateDepart: startInput,
+      dateFin: intervention.dateRetour ? normalizeInputDateTime(intervention.dateRetour) : startInput,
       statut: intervention.statut || 'PLANIFIEE',
     })
     setDialogOpen(true)
@@ -476,14 +511,28 @@ export default function ManagerPlanningDragDrop() {
     setIsSaving(true)
     try {
       const current = interventions.find((item) => item.id === interventionId)
-      const currentDate = current?.dateDepart ? new Date(current.dateDepart) : null
-      const newDate = mergeDateWithTime(targetDate, currentDate)
+      const currentStart = current?.dateDepart ? new Date(current.dateDepart) : null
+      const currentEnd = current?.dateRetour ? new Date(current.dateRetour) : currentStart
+      const newStart = mergeDateWithTime(targetDate, currentStart)
+
+      // BESOIN #3 : on conserve la durée. On décale la date de fin du même
+      // nombre de jours que le déplacement de la date de début.
+      const durationDays = currentStart && currentEnd
+        ? dayDiff(toDateKey(currentStart), toDateKey(currentEnd))
+        : 0
+      const newEnd = new Date(newStart)
+      newEnd.setDate(newEnd.getDate() + durationDays)
+      if (currentEnd) {
+        newEnd.setHours(currentEnd.getHours(), currentEnd.getMinutes(), 0, 0)
+      }
+
       await apiFetch<{ success: boolean }>(`/api/interventions/${interventionId}`, {
         token,
         method: 'PUT',
         body: {
           technicien_id: targetTechnicianId,
-          date_depart: newDate.toISOString(),
+          date_depart: newStart.toISOString(),
+          date_fin: newEnd.toISOString(),
         },
       })
       toast.success('Intervention réaffectée')
@@ -533,6 +582,21 @@ export default function ManagerPlanningDragDrop() {
       return
     }
 
+    // BESOIN #3 : date de fin (optionnelle). Si vide => même jour que le début.
+    let parsedEnd = parsedDate
+    if (form.dateFin) {
+      const candidate = new Date(form.dateFin)
+      if (Number.isNaN(candidate.getTime())) {
+        toast.error('Date de fin invalide')
+        return
+      }
+      if (candidate < parsedDate) {
+        toast.error('La date de fin doit être postérieure ou égale à la date de début')
+        return
+      }
+      parsedEnd = candidate
+    }
+
     setIsSaving(true)
     try {
       const payload = {
@@ -542,6 +606,7 @@ export default function ManagerPlanningDragDrop() {
         lieu_depart: form.lieuDepart.trim(),
         lieu_arrivee: form.lieuArrivee.trim(),
         date_depart: parsedDate.toISOString(),
+        date_fin: parsedEnd.toISOString(),
         statut: form.statut,
       }
 
@@ -843,13 +908,27 @@ export default function ManagerPlanningDragDrop() {
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="date-depart">Date et heure de départ</Label>
+                  <Label htmlFor="date-depart">Date et heure de début</Label>
                   <Input
                     id="date-depart"
                     type="datetime-local"
                     value={form.dateDepart}
                     onChange={(event) => setForm((current) => ({ ...current, dateDepart: event.target.value }))}
                   />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="date-fin">Date et heure de fin</Label>
+                  <Input
+                    id="date-fin"
+                    type="datetime-local"
+                    value={form.dateFin}
+                    onChange={(event) => setForm((current) => ({ ...current, dateFin: event.target.value }))}
+                  />
+                  <p className="text-xs text-gray-500">
+                    Laissez la même date pour une intervention d'une seule journée, ou choisissez une date
+                    ultérieure pour l'étaler sur plusieurs jours.
+                  </p>
                 </div>
 
                 <div className="space-y-2 md:col-span-2">
