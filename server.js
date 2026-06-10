@@ -24,7 +24,13 @@ const app = express()
 // On augmente la limite : les justificatifs (images/PDF) sont envoyés en
 // base64 dans le corps JSON, ce qui gonfle la taille (~+33%).
 app.use(express.json({ limit: '15mb' }))
-app.use(cors())
+app.use(cors({
+  origin: [
+    'http://localhost:5173',
+    'https://frais-deplacement-techniciens-deplo.vercel.app',
+  ],
+  credentials: true,
+}))
 // Les fichiers téléversés sont servis en statique sous /uploads/...
 app.use('/uploads', express.static(UPLOADS_DIR))
 app.use((req, _res, next) => {
@@ -2824,6 +2830,7 @@ ensureAuthConfig()
   })
   .catch((error) => console.error('Erreur lors de la detection du schema auth :', error))
 
-app.listen(3000, () => {
-  console.log('Serveur lance sur http://localhost:3000')
+const PORT = Number(process.env.PORT) || 3000
+app.listen(PORT, () => {
+  console.log(`Serveur lance sur le port ${PORT}`)
 })
